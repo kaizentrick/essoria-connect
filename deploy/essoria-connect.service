@@ -1,0 +1,28 @@
+[Unit]
+Description=Essoria WhatsApp and MCP service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=essoria-connect
+Group=essoria-connect
+WorkingDirectory=/opt/essoria-connect/current
+Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=384
+EnvironmentFile=/etc/essoria-connect/runtime.env
+EnvironmentFile=-/etc/essoria-connect/stripe.env
+ExecStart=/opt/essoria-connect/current/bin/node /opt/essoria-connect/current/dist/cli.js serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/essoria-connect
+MemoryHigh=450M
+MemoryMax=600M
+TasksMax=96
+[Install]
+WantedBy=multi-user.target

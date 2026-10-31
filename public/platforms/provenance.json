@@ -1,0 +1,153 @@
+[
+  {
+    "ok": true,
+    "id": "logo_002",
+    "type": "logo",
+    "path": ".media/images/logo_002.svg",
+    "source": "search",
+    "description": "Claude logo (official mark)",
+    "entity": "claude",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "Claude official logo",
+      "entity": "claude",
+      "slug": "claude",
+      "variant": "default",
+      "variants": [
+        "default",
+        "mono"
+      ],
+      "collection": "brands",
+      "license": "CC0-1.0",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  },
+  {
+    "ok": true,
+    "id": "logo_004",
+    "type": "logo",
+    "path": ".media/images/logo_004.svg",
+    "source": "search",
+    "description": "Gemini logo (official mark)",
+    "entity": "gemini",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "Google Gemini official logo",
+      "entity": "gemini",
+      "slug": "gemini",
+      "variant": "default",
+      "variants": [
+        "default",
+        "wordmark"
+      ],
+      "collection": "brands",
+      "license": "MIT",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  },
+  {
+    "ok": true,
+    "id": "logo_003",
+    "type": "logo",
+    "path": ".media/images/logo_003.svg",
+    "source": "search",
+    "description": "OpenAI logo (official mark)",
+    "entity": "openai",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "ChatGPT official logo",
+      "entity": "openai",
+      "slug": "openai",
+      "variant": "default",
+      "variants": [
+        "default",
+        "light",
+        "dark",
+        "wordmark",
+        "wordmarkLight",
+        "wordmarkDark"
+      ],
+      "collection": "brands",
+      "license": "MIT",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  },
+  {
+    "ok": true,
+    "id": "logo_005",
+    "type": "logo",
+    "path": ".media/images/logo_005.svg",
+    "source": "search",
+    "description": "Instagram logo (official mark)",
+    "entity": "instagram",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "Instagram official logo",
+      "entity": "instagram",
+      "slug": "instagram",
+      "variant": "default",
+      "variants": [
+        "default",
+        "mono",
+        "wordmark"
+      ],
+      "collection": "brands",
+      "license": "CC0-1.0",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  },
+  {
+    "ok": true,
+    "id": "logo_001",
+    "type": "logo",
+    "path": ".media/images/logo_001.svg",
+    "source": "search",
+    "description": "WhatsApp logo (official mark)",
+    "entity": "whatsapp",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "WhatsApp official logo",
+      "entity": "whatsapp",
+      "slug": "whatsapp",
+      "variant": "default",
+      "variants": [
+        "default",
+        "mono",
+        "wordmark"
+      ],
+      "collection": "brands",
+      "license": "CC0-1.0",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  },
+  {
+    "ok": true,
+    "id": "logo_006",
+    "type": "logo",
+    "path": ".media/images/logo_006.svg",
+    "source": "search",
+    "description": "Facebook logo (official mark)",
+    "entity": "facebook",
+    "provenance": {
+      "provider": "thesvg",
+      "prompt": "Facebook official logo",
+      "entity": "facebook",
+      "slug": "facebook",
+      "variant": "default",
+      "variants": [
+        "default",
+        "mono",
+        "wordmark"
+      ],
+      "collection": "brands",
+      "license": "CC0-1.0",
+      "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
+    },
+    "_source": "search"
+  }
+]

@@ -1,0 +1,8 @@
+[Unit]
+Description=Enforce Essoria Connect backup retention
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=5m
+[Install]
+WantedBy=timers.target

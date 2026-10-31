@@ -1,0 +1,19 @@
+[Unit]
+Description=Essoria Cloudflare Tunnel
+After=network-online.target essoria-connect.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=essoria-connect
+Group=essoria-connect
+LoadCredential=tunnel-token:/etc/essoria-connect/tunnel-token
+ExecStart=/opt/essoria-connect/bin/cloudflared tunnel --no-autoupdate --region us run --token-file %d/tunnel-token
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=160M
+[Install]
+WantedBy=multi-user.target

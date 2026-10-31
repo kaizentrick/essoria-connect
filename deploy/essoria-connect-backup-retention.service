@@ -1,0 +1,9 @@
+[Unit]
+Description=Expire Essoria Connect encrypted recovery archives
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/find /var/backups/essoria-connect -maxdepth 1 -type f -name *.tar.enc -mtime +27 -delete
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/essoria-connect
