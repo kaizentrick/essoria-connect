@@ -9,14 +9,18 @@ Crea la marca en una cuenta Stripe separada, con dominio y datos públicos de Es
 Configura fuera de Git:
 
 - `ESSORIA_STRIPE_ACCOUNT_ID`, `ESSORIA_STRIPE_PRICE_ID`.
-- `ESSORIA_STRIPE_SECRET_KEY`, `ESSORIA_STRIPE_WEBHOOK_SECRET` mediante el gestor privado de secretos del despliegue.
+- `ESSORIA_STRIPE_SECRET_KEY`, `ESSORIA_STRIPE_WEBHOOK_SECRET` mediante el gestor privado de secretos del despliegue. Prefiere una clave restringida (`rk_`) con los permisos necesarios para esta aplicación.
 - `ESSORIA_COMMERCIAL_READY=true` únicamente después de aceptar teléfonos reales, validar el flujo de prueba completo y activar la marca en Stripe. Mantén el flag falso mientras falte algo.
+
+Con Docker Compose puedes suministrar esas variables desde un archivo privado
+fuera del checkout: `docker compose --env-file /ruta/privada/essoria.env up -d --build`.
+El archivo de ejemplo no contiene secretos; los valores vacíos mantienen cerrados los cobros.
 
 Para un autoalojamiento de otra marca, cambia de forma explícita la verificación de marca y precio en `src/billing.ts`; no retires silenciosamente esos controles en una instalación compartida.
 
-Endpoint: `POST /api/billing/webhook`. Suscribe Checkout completed/async payment succeeded, customer.subscription created/updated/deleted, invoice paid/payment_failed/payment_action_required, charge.dispute created/closed y charge.refunded. La firma se verifica sobre el cuerpo original; no actives un parser JSON delante de esta ruta.
+Endpoint: `POST /api/billing/webhook`. Suscribe Checkout completed/async payment succeeded, customer.subscription created/updated/deleted, invoice paid/payment_failed/payment_action_required, charge.dispute created/closed, charge.refunded y radar.early_fraud_warning.created. La firma se verifica sobre el cuerpo original; no actives un parser JSON delante de esta ruta.
 
-Se relee la suscripción actual para tolerar eventos atrasados. Solo una factura pagada o un período trialing vigente concede acceso de Stripe. Los eventos son idempotentes; los de una suscripción antigua no reemplazan una posterior. Una disputa o reembolso total mantiene un bloqueo persistente, incluso si llega otra notificación de factura. Una disputa ganada levanta su bloqueo. No se ejecuta ningún reembolso automático.
+Se relee la suscripción actual para tolerar eventos atrasados. Solo una factura pagada o un período trialing vigente concede acceso de Stripe. Los eventos son idempotentes; los de una suscripción antigua no reemplazan una posterior. Una disputa, reembolso total o alerta de fraude accionable mantiene un bloqueo persistente, incluso durante la prueba o si llega otra notificación de factura. Una disputa ganada levanta su bloqueo; una alerta de fraude requiere revisión del operador. No se ejecuta ningún reembolso automático.
 
 Checkout usa claves idempotentes con parámetros estables. No fija `payment_method_types`; Stripe elige los métodos disponibles. La configuración de impuestos queda pendiente de los registros fiscales reales. No se activa Stripe Tax automáticamente. El portal permite al cliente gestionar su suscripción; la eliminación de cuenta cancela una suscripción existente antes de borrar datos locales.
 

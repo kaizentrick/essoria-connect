@@ -202,6 +202,32 @@ test("delayed old subscription events cannot replace a newer subscription; persi
   );
   assert.equal(f.user().billing_state, "refunded");
 });
+test("actionable fraud warnings pause access, including a remaining trial, and later invoices cannot clear the hold", async (t) => {
+  const f = billingFixture(t);
+  f.store.db
+    .prepare("UPDATE customers SET trial_until=? WHERE id=?")
+    .run(Date.now() + 3600000, "u_test");
+  await f.billing.process(
+    f.event("evt_inactive_warning", "radar.early_fraud_warning.created", {
+      id: "iss_inactive",
+      charge: "ch_test",
+      actionable: false,
+    }),
+  );
+  assert.equal(f.portal.entitled(f.user()), true);
+  await f.billing.process(
+    f.event("evt_warning", "radar.early_fraud_warning.created", {
+      id: "iss_actionable",
+      charge: "ch_test",
+      actionable: true,
+    }),
+  );
+  assert.equal(f.user().billing_state, "fraud_warning");
+  assert.equal(f.portal.entitled(f.user()), false);
+  await f.billing.process(f.event("evt_later_invoice", "invoice.paid"));
+  assert.equal(f.user().billing_state, "fraud_warning");
+  assert.equal(f.portal.entitled(f.user()), false);
+});
 test("merchant identity and price are checked; retries use identical checkout parameters and no explicit payment method list", async (t) => {
   const f = billingFixture(t);
   f.store.db

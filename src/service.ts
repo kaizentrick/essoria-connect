@@ -107,7 +107,7 @@ export class Service {
           "X-Essoria-Revision",
           process.env.ESSORIA_REVISION ?? "development",
         );
-        res.json({ status: "ok", version: "0.2.0" });
+        res.json({ status: "ok", version: "0.2.1" });
       } catch {
         res.status(503).json({ status: "unavailable" });
       }

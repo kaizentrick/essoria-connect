@@ -362,7 +362,7 @@ export function createOAuth({
       issuerUrl: issuer,
       resourceServerUrl: new URL(RESOURCE),
       scopesSupported: SCOPES,
-      resourceName: "WhatsApp MCP",
+      resourceName: "Essoria WhatsApp",
       clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     }),
   );

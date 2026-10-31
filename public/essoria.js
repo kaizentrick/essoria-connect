@@ -24,6 +24,24 @@
     );
   const date = (t) =>
     t ? new Date(t).toLocaleString("es-MX") : "Sin uso observado";
+  const paymentStateText = (state, trialUntil) =>
+    state === "beta"
+      ? trialUntil > Date.now()
+        ? "Prueba beta"
+        : "Prueba finalizada"
+      : {
+          active: "Suscripción activa",
+          trialing: "Período de prueba",
+          past_due: "Pago pendiente",
+          unpaid: "Pago pendiente",
+          awaiting_payment: "Pago pendiente",
+          incomplete: "Suscripción sin completar",
+          incomplete_expired: "Suscripción sin completar",
+          canceled: "Suscripción cancelada",
+          disputed: "Pago en revisión",
+          refunded: "Pago reembolsado",
+          fraud_warning: "Pago en revisión",
+        }[state] || "Estado pendiente de comprobar";
   async function request(path, body) {
     const res = await fetch(path, {
       method: body === undefined ? "GET" : "POST",
@@ -302,7 +320,9 @@
       if (!me.billing.accessActive) {
         byId("pair-phone").disabled = true;
         notice(
-          "Tu prueba terminó. Puedes consultar el estado, revocar permisos o contactar al equipo desde Facturación.",
+          me.billing.state === "beta"
+            ? "Tu prueba terminó. Puedes consultar el estado, revocar permisos o contactar al equipo desde Facturación."
+            : "El acceso está pausado. Revisa tu pago o contacta al equipo desde Facturación; puedes consultar el estado y revocar permisos.",
         );
       }
       byId("pair-phone").onclick = async () => {
@@ -403,7 +423,7 @@
         byId("agent-name").focus();
       };
     } else if (route === "/app/facturacion") {
-      content.innerHTML = `<h2>Tu plan y facturación</h2><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco claves de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(me.billing.state === "beta" ? (me.user.trialUntil > Date.now() ? "Prueba beta" : "Prueba finalizada") : me.billing.state)}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><p>Volver desde Stripe no confirma un pago. El acceso se actualiza al recibir y verificar su estado en el servidor.</p><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div>`;
+      content.innerHTML = `<h2>Tu plan y facturación</h2><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco claves de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(paymentStateText(me.billing.state, me.user.trialUntil))}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><p>Volver desde Stripe no confirma un pago. El acceso se actualiza al recibir y verificar su estado en el servidor.</p><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div>`;
       byId("checkout").onclick = () => goBilling("/api/app/checkout");
       byId("billing-portal").onclick = () =>
         goBilling("/api/app/billing/portal");
@@ -522,8 +542,10 @@
   function stopQR() {
     qrSequence++;
     clearInterval(qrTimer);
+    qrTimer = null;
     clearTimeout(expiryTimer);
     qrController?.abort();
+    qrController = null;
     currentQR = null;
     const area = byId("pairing-output"),
       img = byId("pairing-qr");
@@ -542,19 +564,20 @@
     if (
       !byId("pairing-output") ||
       byId("pairing-output").hidden ||
-      navigator.onLine === false
+      navigator.onLine === false ||
+      (qrController && !qrController.signal.aborted)
     )
       return;
     const seq = ++qrSequence;
-    qrController?.abort();
-    qrController = new AbortController();
+    const controller = new AbortController();
+    qrController = controller;
     try {
       const res = await fetch("/api/app/tools", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "whatsapp_pairing_get" }),
         cache: "no-store",
-        signal: qrController.signal,
+        signal: controller.signal,
       });
       if (res.status === 401)
         expireSession("Tu sesión terminó. Inicia sesión de nuevo.");
@@ -571,14 +594,18 @@
         img = r.content.find((c) => c.type === "image"),
         target = byId("pairing-qr");
       if (img && d.expiresAt > Date.now()) {
-        if (currentQR !== d.generation) {
-          currentQR = d.generation;
+        const identity = [d.generation, d.createdAt, d.expiresAt].join(":");
+        if (currentQR !== identity) {
+          currentQR = identity;
           target.src = "data:image/png;base64," + img.data;
           target.hidden = false;
           clearTimeout(expiryTimer);
           expiryTimer = setTimeout(
             () => {
-              if (currentQR !== d.generation || byId("pairing-output").hidden)
+              if (
+                currentQR !== identity ||
+                byId("pairing-output")?.hidden !== false
+              )
                 return;
               target.hidden = true;
               target.removeAttribute("src");
@@ -605,6 +632,7 @@
         byId("phone-state").textContent = stateText(d.state || "connecting");
         if (d.state === "open") {
           clearInterval(qrTimer);
+          qrTimer = null;
           await refreshState();
         }
       }
@@ -616,6 +644,8 @@
       currentQR = null;
       clearTimeout(expiryTimer);
       if (byId("pairing-state")) byId("pairing-state").textContent = e.message;
+    } finally {
+      if (qrController === controller) qrController = null;
     }
   }
   window.addEventListener("offline", () => {

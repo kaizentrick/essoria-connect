@@ -208,6 +208,7 @@ export class Billing {
       "charge.dispute.created",
       "charge.dispute.closed",
       "charge.refunded",
+      "radar.early_fraud_warning.created",
     ];
     if (!supported.includes(event.type)) {
       db.prepare("INSERT OR IGNORE INTO billing_events VALUES(?,?)").run(
@@ -216,8 +217,17 @@ export class Billing {
       );
       return;
     }
+    const fraudWarning = event.type === "radar.early_fraud_warning.created";
+    if (fraudWarning && object.actionable === false) {
+      db.prepare("INSERT OR IGNORE INTO billing_events VALUES(?,?)").run(
+        event.id,
+        Date.now(),
+      );
+      return;
+    }
     const charge =
-      event.type.startsWith("charge.dispute.") && object.charge
+      (event.type.startsWith("charge.dispute.") || fraudWarning) &&
+      object.charge
         ? await this.stripe.charges.retrieve(
             typeof object.charge === "string"
               ? object.charge
@@ -300,6 +310,11 @@ export class Billing {
       if (event.type === "charge.refunded" && object.refunded) {
         hold = "refunded";
         state = "refunded";
+        paidUntil = 0;
+      }
+      if (fraudWarning) {
+        hold = "fraud_warning";
+        state = "fraud_warning";
         paidUntil = 0;
       }
       if (event.type === "charge.dispute.closed" && object.status === "won")
