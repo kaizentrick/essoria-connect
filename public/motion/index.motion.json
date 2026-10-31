@@ -1,0 +1,33 @@
+{
+  "duration": 8,
+  "assertions": [
+    {
+      "kind": "appearsBy",
+      "selector": "#phase-query",
+      "bySec": 0.2
+    },
+    {
+      "kind": "before",
+      "a": "#phase-query",
+      "b": "#phase-permission"
+    },
+    {
+      "kind": "before",
+      "a": "#phase-permission",
+      "b": "#phase-response"
+    },
+    {
+      "kind": "staysInFrame",
+      "selector": "#query-dot"
+    },
+    {
+      "kind": "staysInFrame",
+      "selector": "#answer-dot"
+    },
+    {
+      "kind": "keepsMoving",
+      "withinSelector": "#root",
+      "maxStaticSec": 2
+    }
+  ]
+}
