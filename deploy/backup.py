@@ -19,6 +19,10 @@ paths = [pathlib.Path('/var/lib/essoria-connect'), pathlib.Path('/etc/essoria-co
 current = pathlib.Path('/opt/essoria-connect/current')
 if current.exists():
     paths += [current, current.resolve()]
+paths += [pathlib.Path('/opt/essoria-connect/bin')]
+paths += [pathlib.Path('/etc/systemd/system') / name for name in [
+    'essoria-connect.service', 'essoria-connect-tunnel.service',
+    'essoria-connect-backup-retention.service', 'essoria-connect-backup-retention.timer']]
 paths = [p for p in paths if p.exists()]
 if not paths:
     raise SystemExit('No Essoria data found')

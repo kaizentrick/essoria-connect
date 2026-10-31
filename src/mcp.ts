@@ -421,7 +421,7 @@ export class Tools {
         "read",
         z.object({}).strict(),
         (_a, p) => ({
-          version: "0.2.0",
+          version: "0.2.1",
           status: "ok",
           accounts: this.store
             .accounts()
@@ -486,7 +486,7 @@ export class Tools {
   }
   server(principal: Principal): Server {
     const server = new Server(
-      { name: "essoria", version: "0.2.0" },
+      { name: "essoria", version: "0.2.1" },
       {
         capabilities: { tools: {} },
         instructions:

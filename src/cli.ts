@@ -68,7 +68,7 @@ async function main() {
         "WA_SERVER_URL must use HTTPS, or HTTP on loopback, without credentials or query parameters",
       );
     const client = new Client(
-      { name: "essoria-stdio", version: "0.2.0" },
+      { name: "essoria-stdio", version: "0.2.1" },
       { capabilities: {} },
     );
     await client.connect(
@@ -77,7 +77,7 @@ async function main() {
       }),
     );
     const server = new Server(
-      { name: "essoria", version: "0.2.0" },
+      { name: "essoria", version: "0.2.1" },
       { capabilities: { tools: {} }, instructions: client.getInstructions() },
     );
     server.setRequestHandler(ListToolsRequestSchema, () => client.listTools());
