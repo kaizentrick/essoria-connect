@@ -298,3 +298,36 @@ test("closing new sales still allows existing clients to cancel or manage; cance
   assert.equal(cancelled, 1);
   await assert.rejects(f.billing.checkout(f.user()), /no están habilitados/);
 });
+
+test("concurrent webhook reconciliation cannot write a stale active state after cancellation", async (t) => {
+  const f = billingFixture(t);
+  let release, began;
+  const gate = new Promise((r) => (release = r));
+  const started = new Promise((r) => (began = r));
+  let first = true;
+  f.client.subscriptions.retrieve = async () => {
+    const snapshot = structuredClone(f.subs.get("sub_current"));
+    if (first) {
+      first = false;
+      began();
+      await gate;
+    }
+    return snapshot;
+  };
+  const paid = f.billing.process(
+    f.event("evt_concurrent_paid", "invoice.paid"),
+  );
+  await started;
+  f.subs.get("sub_current").status = "canceled";
+  const canceled = f.billing.process(
+    f.event("evt_concurrent_cancel", "customer.subscription.deleted", {
+      id: "sub_current",
+      customer: "cus_test",
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+  release();
+  await Promise.all([paid, canceled]);
+  assert.equal(f.user().billing_state, "canceled");
+  assert.equal(f.portal.entitled(f.user()), false);
+});
