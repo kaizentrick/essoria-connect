@@ -420,10 +420,14 @@
           );
           stopQR();
           byId("workspace-content").innerHTML =
-            "<h2>Cuenta eliminada</h2><p>" +
+            '<h2 id="deleted-title" tabindex="-1">Cuenta eliminada</h2><p>' +
             escape(r.message) +
             '</p><a href="/">Volver a Essoria →</a>';
-          notice("");
+          byId("deleted-title").focus();
+          byId("account-identity").textContent = "No hay una sesión activa";
+          byId("sign-out").hidden = true;
+          me = null;
+          notice(r.message);
         } catch (error) {
           notice(error.message);
           b.disabled = false;
