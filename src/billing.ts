@@ -5,6 +5,7 @@ import type { Portal, PortalOptions } from "./portal.js";
 
 export class Billing {
   private stripe?: Stripe;
+  private reconciliation: Promise<void> = Promise.resolve();
   constructor(
     private portal: Portal,
     private options: PortalOptions,
@@ -187,7 +188,12 @@ export class Billing {
     );
     await this.process(event);
   }
-  async process(event: Stripe.Event): Promise<void> {
+  process(event: Stripe.Event): Promise<void> {
+    const work = this.reconciliation.then(() => this.reconcile(event));
+    this.reconciliation = work.catch(() => {});
+    return work;
+  }
+  private async reconcile(event: Stripe.Event): Promise<void> {
     if (!this.stripe) throw new Error("Unconfigured");
     const db = this.portal.store.db;
     if (db.prepare("SELECT id FROM billing_events WHERE id=?").get(event.id))
