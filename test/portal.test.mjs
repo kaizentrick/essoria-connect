@@ -703,12 +703,29 @@ test("agent consent survives parallel tabs and login in a second browser, with o
     });
     return review(await f.get("/authorize?" + query));
   }
-  function accept(flow, cookie, number) {
+  async function browserReturn(response) {
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.match(response.headers.get("cache-control"), /no-store/);
+    const page = await response.text();
+    const automatic = page.match(
+      /http-equiv="refresh" content="0;url=([^"]+)"/,
+    )[1];
+    const manual = page.match(/href="([^"]+)">Volver al agente</)[1];
+    assert.equal(manual, automatic);
+    return new URL(automatic.replaceAll("&amp;", "&"));
+  }
+  function accept(flow, cookie, number, decision = "approve") {
     return fetch(f.base + "/oauth/consent", {
       method: "POST",
       redirect: "manual",
-      headers: { origin, cookie: user.cookie + "; " + cookie },
+      headers: {
+        origin,
+        accept: "text/html",
+        cookie: user.cookie + "; " + cookie,
+      },
       body: new URLSearchParams({
+        decision,
         request: flow.id,
         proof: flow.proof,
         company: "yes",
@@ -734,8 +751,7 @@ test("agent consent survives parallel tabs and login in a second browser, with o
     ["Muse", muse, second],
   ]) {
     const response = await accept(flow, browser, number);
-    assert.equal(response.status, 303);
-    const redirect = new URL(response.headers.get("location"));
+    const redirect = await browserReturn(response);
     assert.equal(redirect.hostname, name.toLowerCase() + ".example.test");
     assert.equal(redirect.searchParams.get("state"), name);
     assert(redirect.searchParams.get("code"));
@@ -749,6 +765,14 @@ test("agent consent survives parallel tabs and login in a second browser, with o
     (await accept(initialMuse, initialMuse.cookie, second)).status,
     400,
   );
+  const cursor = await begin("Cursor");
+  const cancelled = await browserReturn(
+    await accept(cursor, cursor.cookie, primary, "cancel"),
+  );
+  assert.equal(cancelled.host, "cursor.example.test");
+  assert.equal(cancelled.searchParams.get("error"), "access_denied");
+  assert.equal(cancelled.searchParams.get("state"), "Cursor");
+  assert.equal(cancelled.searchParams.has("code"), false);
   const expired = await begin("Muse");
   f.service.oauth.store.db
     .prepare("UPDATE records SET expires=1 WHERE kind='pending' AND id=?")

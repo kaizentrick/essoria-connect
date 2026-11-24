@@ -94,7 +94,7 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
     assert(
       res.headers
         .get("content-security-policy")
-        .includes("form-action 'self' https://agent.example.test"),
+        .includes("form-action 'self';"),
     );
     const html = await res.text(),
       id = html.match(/entrar\?oauth=([a-zA-Z0-9_-]+)/)[1],
