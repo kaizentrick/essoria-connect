@@ -139,7 +139,7 @@ export class Wake {
   }
   private allowed(connection: string, account: string) {
     const grant = this.store.get<any>("access-key", "", connection);
-    if (!grant) return false;
+    if (!grant || !grant.permissions.includes("read")) return false;
     const selected = grant.numbers ?? [
       { id: grant.accountId, epoch: grant.epoch },
     ];

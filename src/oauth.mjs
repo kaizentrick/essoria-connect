@@ -317,7 +317,15 @@ export function createOAuth({
           throw new InvalidTargetError("Wrong resource");
         if (scopes?.some((s) => !grant.scopes.includes(s)))
           throw new InvalidScopeError("Cannot expand scopes");
-        if (scopes?.length) grant.scopes = scopes;
+        if (scopes?.length) {
+          grant.scopes = scopes;
+          activateConnection?.(
+            grant.principal,
+            connectionInfo(client, grant.redirectUri, grant.resource, scopes),
+            grant.expires,
+            true,
+          );
+        }
         store.delete("refresh", digest(token));
         store.set("grant", record.grantId, grant, grant.expires);
         return issue(record.grantId, grant);

@@ -330,7 +330,10 @@ test("2026 MCP serves discovery and authorized tools on the public transport", a
     const body = await response.text();
     assert.equal(response.status, 200, body);
     assert(!body.includes('"error":'), body);
-    if (method === "server/discover") assert.match(body, /"events":\{\}/);
+    if (method === "server/discover") {
+      assert.match(body, /"events":\{\}/);
+      assert.ok(body.includes("io.modelcontextprotocol/events"));
+    }
     if (method === "events/list")
       assert.match(body, /whatsapp.message.received/);
     if (method === "tools/list") assert(body.includes("whatsapp_message_send"));
@@ -548,7 +551,18 @@ test("MCP events verify callbacks, preserve filters and ownership, sign delivery
   assert.equal(calls[1].data.messageId, "yes");
   assert(!JSON.stringify(calls[1]).includes("fixture"));
   assert.equal(events.status([p.tokenHash]).count, 1);
-  await events.handle("events/unsubscribe", params, p);
+  const realPost = events.post;
+  events.post = async () => ({ status: 410, body: "" });
+  f.service.sessions.ingest(n, incoming("skip"), true);
+  await events.drain();
+  assert.equal(events.status([p.tokenHash]).count, 1);
+  events.post = realPost;
+  await events.handle(
+    "events/unsubscribe",
+    { ...params, delivery: { url: params.delivery.url } },
+    p,
+  );
+
   await events.handle("events/unsubscribe", params, p);
   assert.equal(events.status([p.tokenHash]).count, 0);
   const post = events.post;
@@ -556,6 +570,10 @@ test("MCP events verify callbacks, preserve filters and ownership, sign delivery
   await assert.rejects(
     () => events.handle("events/subscribe", params, p),
     (e) => e.code === -32015,
+  );
+  await assert.rejects(
+    () => events.handle("events/subscribe", params, p, true),
+    (e) => e.code === -32027,
   );
   events.post = post;
   await events.handle("events/subscribe", params, p);
@@ -597,4 +615,48 @@ test("legacy MCP initialization advertises events and exposes the authenticated 
     (await invoke("events/subscribe", { name: "invalid" })).error.code,
     -32602,
   );
+});
+
+test("downscoping a company connection removes its active read subscriptions", async (t) => {
+  const f = await portalFixture(t),
+    u = await f.register("narrow-events@example.test");
+  const { account } = await (await f.get("/api/app/me", u.cookie)).json(),
+    p = f.service.portal.authorizeNumbers(
+      { headers: { cookie: u.cookie } },
+      [account.id],
+      "Dot",
+    );
+  const info = {
+    connection: "provider-and-client",
+    provider: "openai",
+    permissions: ["read", "send"],
+  };
+  f.service.portal.activateConnection(p, info, 0, false);
+  const events = f.service.portal.events;
+  events.post = async (_url, b) => ({
+    status: 200,
+    body: JSON.stringify({ challenge: JSON.parse(b).challenge }),
+  });
+  await events.handle(
+    "events/subscribe",
+    {
+      name: "whatsapp.message.received",
+      arguments: { account: account.id },
+      delivery: {
+        mode: "webhook",
+        url: "https://example.test/cb",
+        secret: "whsec_" + Buffer.alloc(32, 3).toString("base64"),
+      },
+    },
+    p,
+  );
+  assert.equal(events.status([p.tokenHash]).count, 1);
+  f.service.portal.activateConnection(
+    p,
+    { ...info, permissions: ["send"] },
+    0,
+    true,
+  );
+  assert.equal(events.status([p.tokenHash]).count, 0);
+  assert.deepEqual(f.service.access.resolve(p).permissions, ["send"]);
 });

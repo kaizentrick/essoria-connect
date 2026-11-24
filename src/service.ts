@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eventCapabilities, eventMethods } from "./events.js";
+import { eventCapabilities, eventExtension, eventMethods } from "./events.js";
 import {
   createMcpHandler,
   isLegacyRequest,
@@ -233,7 +233,14 @@ export class Service {
                     method,
                     { params: z.looseObject({}) },
                     (params) =>
-                      this.portal.events.handle(method, params, principal),
+                      this.portal.events.handle(
+                        method,
+                        params,
+                        principal,
+                        !!req.body.params?._meta?.[
+                          "io.modelcontextprotocol/clientCapabilities"
+                        ]?.extensions?.[eventExtension],
+                      ),
                   );
               }
               for (const spec of this.tools.visible(principal)) {
