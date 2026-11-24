@@ -149,5 +149,13 @@
       "pinned": "glincker/thesvg@e5957fa742c1ebf6da07ac40665bdd01d8add35f"
     },
     "_source": "search"
+  },
+  {
+    "entity": "muse",
+    "source": "https://muse.ai/images/favicon/app-squiggle.svg"
+  },
+  {
+    "entity": "grok",
+    "source": "https://grok.com/images/apple-touch-icon.png"
   }
 ]

@@ -1315,3 +1315,31 @@ body[data-route^="/app"] .site-header {max-width:1100px}
 .agent-guides summary{cursor:pointer;font-weight:bold}
 .agent-guides .guide-value{padding:12px;border-radius:8px;background:#081b1d;color:var(--ink);overflow-wrap:anywhere}
 @media(max-width:480px){.instance-filters{flex-wrap:wrap}.instance-filters input{flex-basis:100%}}
+
+.connected-agent,.settings-row,.receipt-setting,.agent-identity,.dialog-actions {display:flex;align-items:center;gap:16px}
+.connected-agent,.account-block {border:1px solid var(--edge);background:var(--panel);border-radius:18px;padding:20px 22px;margin:12px 0}
+.agent-identity {flex:1;min-width:0}
+#workspace-content .connected-agent h3,#workspace-content .connected-agent p,#workspace-content .account-block h3 {margin:0}
+.agent-logo,.agent-initial {flex:none;display:inline-grid;place-items:center;object-fit:contain;background:#f1f4f2;border-radius:10px;padding:5px;color:#123532}
+.agent-initial {width:38px;height:38px}
+.agent-guides summary .agent-logo {vertical-align:middle;margin:0 12px 0 5px}
+.agent-access,.receipt-setting span,.settings-row>div {display:grid;gap:3px}
+.connected-agent p,.connected-agent small,.receipt-setting small,.settings-row small {color:var(--muted);overflow-wrap:anywhere}
+.agent-alerts {margin:20px 0 40px}
+.agent-alerts summary,.account-block summary {cursor:pointer;font-weight:650}
+.receipt-setting,.settings-row {justify-content:space-between}
+.receipt-setting {margin:24px 0;cursor:pointer}
+.receipt-setting input {appearance:none;flex:none;border:1px solid #658280;width:44px;height:26px;min-height:0;padding:3px;border-radius:99px!important;background:#2a4344;cursor:pointer}
+.receipt-setting input::before {content:"";display:block;height:18px;width:18px;background:#e6f4f1;border-radius:50%}
+.receipt-setting input:checked {background:#28867d}
+.receipt-setting input:checked::before {transform:translateX(17px)}
+.account-block .settings-row {margin-top:16px}
+.delete-row {padding:18px 0;margin:24px 0;color:#f6bcaf}
+dialog {color:var(--ink);background:#10282a;border:1px solid #416061;border-radius:20px;padding:clamp(20px,4vw,32px);width:min(450px,calc(100vw - 32px));max-height:85svh;box-sizing:border-box}
+dialog::backdrop {background:#021014c9}
+#workspace-content dialog h2 {margin:0 0 16px}
+dialog .app-form {padding:0;border:0;margin:0}
+dialog [role=alert]:empty {display:none}
+.dialog-actions {justify-content:flex-end;flex-wrap:wrap}
+@media(max-width:600px){.connected-agent{display:grid;grid-template-columns:1fr auto;gap:14px}.agent-identity{grid-column:1/-1}.settings-row{align-items:flex-start;flex-wrap:wrap}.agent-guides{margin-bottom:20px}}
+.agent-logo[src$="/openai.svg"] {background:#192324}

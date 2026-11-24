@@ -24,9 +24,12 @@ Unknown fields are rejected. Permissions are checked on tool listing and calls.
 | `whatsapp_group_list` | read | Groups the account belongs to |
 | `whatsapp_group_get` | read | Subject, description and paginated participants |
 | `whatsapp_message_send` | send | One text, explicit recipient and `requestId` |
-| `whatsapp_media_get` | read | Attachment as bounded MCP embedded binary resource |
+| `whatsapp_media_get` | read | Native MCP audio or image, or an embedded file with its MIME type |
 | `whatsapp_media_send` | send | Base64 image/document/audio, optional caption |
 | `whatsapp_health_get` | read | Service version and accessible account states |
+
+Agent reads of incoming messages or attachments send WhatsApp read receipts when
+the company enables the setting on that number. It is off by default.
 
 Inspect `tools/list` for the authoritative JSON schemas. A read-only credential
 exposes 13 tools. A credential with `read,send` exposes 15. Management tools are

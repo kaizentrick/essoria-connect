@@ -42,6 +42,7 @@ export class Access {
     days = 30,
     name = "Agent",
     numbers?: string[],
+    pendingOAuth = false,
   ): { token: string; id: string; expiresAt: number } {
     const account = this.store.account(accountId);
     if (
@@ -51,17 +52,18 @@ export class Access {
       throw new Error(
         "Permissions must include read and use only read,send,manage",
       );
-    if (!Number.isInteger(days) || days < 1 || days > 365)
+    if (!Number.isInteger(days) || days < (pendingOAuth ? 0 : 1) || days > 365)
       throw new Error("Token lifetime must be 1-365 days");
     const token = "wa_" + randomBytes(32).toString("base64url"),
       id = hash(token),
-      expiresAt = Date.now() + days * 86400000;
+      expiresAt = days ? Date.now() + days * 86400000 : 0;
     this.store.put(
       "access-key",
       "",
       id,
       {
         accountId: account.id,
+        pendingOAuth,
         numbers: numbers?.map((id) => ({
           id,
           epoch: this.store.account(id).epoch,
@@ -72,7 +74,7 @@ export class Access {
         createdAt: Date.now(),
         lastUsedAt: null,
       },
-      expiresAt,
+      pendingOAuth ? Date.now() + 125000 : expiresAt,
     );
     return { token, id, expiresAt };
   }
@@ -146,6 +148,9 @@ export class Access {
   tokens(accountId: string): {
     id: string;
     numberIds: string[];
+    unconfirmed: boolean;
+    connection?: string;
+    provider?: string;
     name: string;
     permissions: Permission[];
     createdAt: number;
@@ -156,16 +161,29 @@ export class Access {
       out = [];
     for (const r of this.store.db
       .prepare(
-        "SELECT id,expires FROM slots WHERE kind='access-key' AND expires>?",
+        "SELECT id,expires FROM slots WHERE kind='access-key' AND (expires=0 OR expires>?)",
       )
       .all(Date.now()) as any[]) {
       const v = this.store.get<any>("access-key", "", r.id);
-      if (v?.accountId === account.id && v.epoch === account.epoch)
+      if (
+        v?.accountId === account.id &&
+        !v.pendingOAuth &&
+        v.epoch === account.epoch &&
+        (!v.numbers ||
+          v.numbers.every((n: { id: string; epoch: number }) =>
+            this.store.db
+              .prepare("SELECT 1 FROM accounts WHERE id=? AND epoch=?")
+              .get(n.id, n.epoch),
+          ))
+      )
         out.push({
           id: r.id,
           numberIds: v.numbers?.map((n: { id: string }) => n.id) ?? [
             account.id,
           ],
+          unconfirmed: !!v.numbers && !v.connection && v.pendingOAuth !== false,
+          connection: v.connection,
+          provider: v.provider,
           name: v.name ?? "Agent",
           permissions: v.permissions,
           createdAt: v.createdAt ?? 0,

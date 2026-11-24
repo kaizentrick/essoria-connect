@@ -8,6 +8,8 @@ import makeWASocket, {
   type WAMessage,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
+import { randomInt } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 export type EventBatch = Record<string, any>;
 export interface SocketPort {
@@ -15,6 +17,7 @@ export interface SocketPort {
   close(): Promise<void>;
   logout(): Promise<void>;
   send(jid: string, content: any, messageId: string): Promise<any>;
+  readMessages(keys: NonNullable<WAMessage["key"]>[]): Promise<void>;
   check(numbers: string[]): Promise<any[]>;
   groups(): Promise<Record<string, any>>;
   group(jid: string): Promise<any>;
@@ -64,8 +67,18 @@ export const baileysDriver: DriverFactory = async (options) => {
     async logout() {
       await sock.logout();
     },
-    send: (jid, content, messageId) =>
-      sock.sendMessage(jid, content, { messageId }),
+    readMessages: (keys) => sock.readMessages(keys),
+    async send(jid, content, messageId) {
+      try {
+        await sock.sendPresenceUpdate("composing", jid);
+        await delay(randomInt(900, 2301));
+      } catch {}
+      try {
+        return await sock.sendMessage(jid, content, { messageId });
+      } finally {
+        await sock.sendPresenceUpdate("paused", jid).catch(() => {});
+      }
+    },
     check: async (numbers) => (await sock.onWhatsApp(...numbers)) ?? [],
     groups: () => sock.groupFetchAllParticipating(),
     group: (jid) => sock.groupMetadata(jid),

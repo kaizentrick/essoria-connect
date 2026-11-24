@@ -615,7 +615,24 @@ export class Sessions {
     }
     return value;
   }
-  async media(id: string, messageId: string, chatId?: string): Promise<Buffer> {
+  async markViewed(id: string, messages: StoredMessage[]) {
+    if (!this.store.get("preferences", id, "read-receipts")) return;
+    const keys = messages
+      .filter(
+        (m) =>
+          !m.fromMe &&
+          !["protocolMessage", "senderKeyDistributionMessage"].includes(m.type),
+      )
+      .map((m) => (m.raw as any)?.key)
+      .filter((k) => k?.id && k.remoteJid);
+    if (!keys.length) return;
+    try {
+      await this.socket(id).readMessages(keys);
+    } catch {
+      /* Stored messages remain available offline. */
+    }
+  }
+  async media(id: string, messageId: string, chatId?: string) {
     const a = this.store.account(id),
       m = this.store.messages(a.id, {
         id: messageId,
@@ -635,7 +652,29 @@ export class Sessions {
       }
       chunks.push(Buffer.from(chunk));
     }
-    return Buffer.concat(chunks);
+    const stored = m[0]!,
+      raw = stored.raw as any,
+      message = normalizeMessageContent(raw.message);
+    const attachment = message && (message as any)[stored.type];
+    const type = String(attachment?.mimetype ?? "")
+      .split(";")[0]!
+      .trim()
+      .toLowerCase();
+    const mimeType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(type)
+      ? type
+      : "application/octet-stream";
+    await this.markViewed(a.id, [stored]);
+    return {
+      bytes: Buffer.concat(chunks),
+      mimeType,
+      fileName: attachment?.fileName ?? null,
+      kind:
+        stored.type === "audioMessage" && mimeType.startsWith("audio/")
+          ? "audio"
+          : stored.type === "imageMessage" && mimeType.startsWith("image/")
+            ? "image"
+            : "resource",
+    };
   }
   async shutdown(): Promise<void> {
     this.stopped = true;

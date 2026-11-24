@@ -9,7 +9,7 @@ const agentGuide = `<h2>Conecta tu agente</h2><p>Elige tu agente. Al entrar en E
     "Conecta Essoria como servidor MCP en https://essoria.app/mcp y envíame el enlace OAuth para autorizar mis instancias de WhatsApp.",
   ],
   [
-    "Dot",
+    "Dot / ChatGPT",
     "En Plugins, añade un servidor MCP con esta URL. Abre la conexión e inicia sesión.",
     "https://essoria.app/mcp",
   ],
@@ -25,8 +25,8 @@ const agentGuide = `<h2>Conecta tu agente</h2><p>Elige tu agente. Al entrar en E
   ],
 ]
   .map(
-    ([name, help, value]) =>
-      `<details><summary>${name}</summary><p>${help}</p><p class="guide-value">${value}</p><button type="button" class="secondary" data-guide-copy>${name === "Muse" ? "Copiar mensaje" : "Copiar URL"}</button></details>`,
+    ([name, help, value], index) =>
+      `<details><summary><img class="agent-logo" src="/assets/platforms/${["muse.svg", "openai.svg", "claude.svg", "grok.png"][index]}" width="32" height="32" alt="">${name}</summary><p>${help}</p><p class="guide-value">${value}</p><button type="button" class="secondary" data-guide-copy>${name === "Muse" ? "Copiar mensaje" : "Copiar URL"}</button></details>`,
   )
   .join("")}</div>`;
 const pages: Record<
@@ -116,13 +116,13 @@ function shell(
   path: string,
   origin: string,
 ) {
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Essoria</title><meta name="description" content="${esc(description)}"><link rel="canonical" href="${origin + path}"><meta name="theme-color" content="#0c3836"><link rel="icon" href="/assets/brand/essoria/favicon-32.png"><link rel="apple-touch-icon" href="/assets/brand/essoria/apple-touch-icon.png"><link rel="stylesheet" href="/assets/essoria.css?v=0.3.0-instancias"><script src="/assets/essoria.js?v=0.3.0-instancias" defer></script></head><body data-route="${path}"><a class="skip-link" href="#main">Saltar al contenido</a><header class="site-header"><a href="/" aria-label="Essoria, inicio"><img src="/assets/brand/essoria/logo-horizontal-dark.png" width="1451" height="360" alt="Essoria"></a>${path.startsWith("/app") ? '<a class="workspace-help" href="/docs">Guía de Essoria ↗</a>' : `<nav class="desktop-nav" aria-label="Principal">${nav}</nav><details class="mobile-nav"><summary>Menú</summary><nav aria-label="Navegación móvil">${nav}</nav></details>`}</header><main id="main">${body}</main><footer class="site-footer"><div><img src="/assets/brand/essoria/logo-horizontal-dark.png" width="1451" height="360" alt="Essoria"><p>Conexiones para tu propio agente.</p><p>Un producto de KaizenTrick.</p></div><nav aria-label="Información"><a href="/seguridad">Seguridad</a><a href="/estado">Estado</a><a href="/contacto">Contacto</a><a href="/privacidad">Privacidad</a><a href="/terminos">Términos</a></nav><p class="footer-disclosure">WhatsApp QR utiliza un dispositivo vinculado mediante un transporte no oficial. Essoria no está afiliada a WhatsApp ni a Meta.</p></footer></body></html>`;
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Essoria</title><meta name="description" content="${esc(description)}"><link rel="canonical" href="${origin + path}"><meta name="theme-color" content="#0c3836"><link rel="icon" href="/assets/brand/essoria/favicon-32.png"><link rel="apple-touch-icon" href="/assets/brand/essoria/apple-touch-icon.png"><link rel="stylesheet" href="/assets/essoria.css?v=0.3.0-agentes2"><script src="/assets/essoria.js?v=0.3.0-agentes2" defer></script></head><body data-route="${path}"><a class="skip-link" href="#main">Saltar al contenido</a><header class="site-header"><a href="/" aria-label="Essoria, inicio"><img src="/assets/brand/essoria/logo-horizontal-dark.png" width="1451" height="360" alt="Essoria"></a>${path.startsWith("/app") ? "" : `<nav class="desktop-nav" aria-label="Principal">${nav}</nav><details class="mobile-nav"><summary>Menú</summary><nav aria-label="Navegación móvil">${nav}</nav></details>`}</header><main id="main">${body}</main><footer class="site-footer"><div><img src="/assets/brand/essoria/logo-horizontal-dark.png" width="1451" height="360" alt="Essoria"><p>Conexiones para tu propio agente.</p><p>Un producto de KaizenTrick.</p></div><nav aria-label="Información"><a href="/seguridad">Seguridad</a><a href="/estado">Estado</a><a href="/contacto">Contacto</a><a href="/privacidad">Privacidad</a><a href="/terminos">Términos</a></nav><p class="footer-disclosure">WhatsApp QR utiliza un dispositivo vinculado mediante un transporte no oficial. Essoria no está afiliada a WhatsApp ni a Meta.</p></footer></body></html>`;
 }
 function authBody(mode: string) {
   const register = mode === "registro";
   return `<div class="auth-layout"><div><h1>${register ? "Tu próxima conexión empieza aquí." : "Tu espacio de conexiones."}</h1><p class="lead">Conecta tus instancias de WhatsApp y elige qué agente puede usarlas.</p><p>Para vincular WhatsApp por QR necesitarás otra pantalla además de tu teléfono.</p><a href="/docs">Leer la guía antes de empezar →</a></div><form id="auth-form" class="account-form" data-mode="${mode}">${register ? '<label for="name">Tu nombre o negocio</label><input id="name" name="name" autocomplete="organization" minlength="2" maxlength="80" required>' : ""}<label for="email">Correo</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="200"><label for="password">Contraseña</label><input id="password" name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" required minlength="8" maxlength="200" aria-describedby="password-help"><p id="password-help">Usa al menos 8 caracteres. Puedes usar un gestor de contraseñas.</p>${register ? '<label class="check-row"><input type="checkbox" name="acceptedTerms" required><span> Acepto los <a href="/terminos">términos</a> y la <a href="/privacidad">privacidad</a> de la beta.</span></label>' : ""}<button type="submit">${register ? "Crear mi cuenta" : "Entrar"}</button><p id="form-status" role="status"></p><div class="auth-links"><a href="${register ? "/entrar" : "/registro"}">${register ? "Ya tengo cuenta" : "Crear una cuenta"}</a><a href="/contacto">Necesito ayuda</a></div></form></div>`;
 }
-const appBody = `<template id="agent-guide">${agentGuide}</template><div class="workspace-heading"><h1>Mi espacio</h1><p id="account-identity">Cargando tu cuenta…</p><button id="sign-out" type="button">Cerrar sesión</button></div><div class="workspace-layout"><nav class="workspace-nav" aria-label="Mi cuenta"><a href="/app/conexiones">Instancias</a><a href="/app/agentes">Agentes</a><a href="/app/facturacion">Facturación</a><a href="/app/cuenta">Mi cuenta</a></nav><div class="workspace-panel"><p id="app-notice" role="status" class="app-notice"></p><div id="workspace-content"><p role="status">Consultando el estado actual…</p></div></div></div>`;
+const appBody = `<template id="agent-guide">${agentGuide}</template><div class="workspace-heading"><h1>Mi espacio</h1><p id="account-identity">Cargando tu cuenta…</p><button id="sign-out" type="button">Cerrar sesión</button></div><div class="workspace-layout"><nav class="workspace-nav" aria-label="Mi cuenta"><a href="/app/conexiones">Instancias</a><a href="/app/agentes">Agentes</a><a href="/app/cuenta">Mi cuenta</a></nav><div class="workspace-panel"><p id="app-notice" role="status" class="app-notice"></p><div id="workspace-content"><p role="status">Consultando el estado actual…</p></div></div></div>`;
 export function siteRouter(config: Config) {
   const router = express.Router();
   router.use((_req, res, next) => {
@@ -153,6 +153,9 @@ export function siteRouter(config: Config) {
         .type("html")
         .send(shell(p.title, p.description, p.body, path, config.publicUrl)),
     );
+  router.get("/app/facturacion", (_req, res) =>
+    res.redirect("/app/cuenta#facturacion"),
+  );
   router.get("/recuperar", (_req, res) => res.redirect("/contacto"));
   for (const mode of ["entrar", "registro"])
     router.get("/" + mode, (_req, res) =>
@@ -172,13 +175,7 @@ export function siteRouter(config: Config) {
           ),
         ),
     );
-  for (const path of [
-    "/app",
-    "/app/conexiones",
-    "/app/agentes",
-    "/app/facturacion",
-    "/app/cuenta",
-  ])
+  for (const path of ["/app", "/app/conexiones", "/app/agentes", "/app/cuenta"])
     router.get(path, (_req, res) =>
       res
         .set("X-Robots-Tag", "noindex")
