@@ -225,10 +225,10 @@ export function codeModeServer(
     };
   const server = openApiMcpServer({
     name: "essoria-codemode",
-    version: "0.2.1",
+    version: "0.3.0",
     spec: {
       openapi: "3.1.0",
-      info: { title: "Essoria account-scoped API", version: "0.2.1" },
+      info: { title: "Essoria account-scoped API", version: "0.3.0" },
       paths,
     },
     executor: new WasmExecutor(),

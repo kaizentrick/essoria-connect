@@ -7,10 +7,11 @@ El transporte procede del [prototipo WhatsApp MCP](https://github.com/kaizentric
 ## Qué incluye
 
 - Registro, acceso, código de recuperación, prueba de siete días y eliminación de la cuenta.
-- Un número por cuenta de la aplicación y hasta cinco claves de agentes, con lectura, envío y gestión separados. El operador puede administrar múltiples números.
+- Una cuenta de empresa puede vincular varios números. En OAuth se seleccionan los números que cada agente puede leer y responder. El portal permite revocar cada conexión.
 - 20 herramientas MCP para cuentas, QR, contactos, chats, historial disponible, grupos, envío a uno mismo, contactos o números nuevos con WhatsApp, archivos y recibos. El catálogo se filtra según los permisos.
-- MCP Streamable HTTP `/mcp`, OAuth con PKCE y puente stdio. Cada agente recibe una autorización revocable.
+- MCP 2026-07-28 en `/mcp`, compatibilidad con clientes anteriores, OAuth con PKCE y puente stdio. Cada agente recibe una autorización revocable.
 - `/mcp/code` opcional: `search` + `execute` del SDK Code Mode de Cloudflare y un ejecutor QuickJS/WASM autoalojado. Conserva los permisos y la separación por cuenta.
+- Avisos HTTPS opcionales por conexión para cada mensaje entrante, el primer mensaje de un chat o contactos elegidos. Para Grok se admite la firma Standard Webhooks. El receptor del agente determina si el aviso inicia una ejecución.
 - Facturación preparada con Stripe Checkout, portal y webhooks firmados, cerrada por defecto. Plan propuesto: USD 10/mes, un número, cinco claves y 1.000 solicitudes únicas de envío por mes UTC. El modelo de IA se paga por separado.
 - Docker sin root, SQLite persistente, credenciales y registros originales cifrados, pruebas y CI.
 

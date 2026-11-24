@@ -236,3 +236,146 @@ test("public pages preserve availability truth, support requests persist, and me
   assert(!sitemap.includes("/app"));
   assert((await f.get("/app")).headers.get("x-robots-tag").includes("noindex"));
 });
+
+test("company grants restrict both MCP and queued wakes to chosen numbers", async (t) => {
+  const f = await portalFixture(t),
+    a = await f.register("multi@example.test"),
+    b = await f.register("unrelated@example.test");
+  const me = async (c) => (await f.get("/api/app/me", c)).json();
+  const first = (await me(a.cookie)).account.id,
+    other = (await me(b.cookie)).account.id;
+  const second = (
+    await (
+      await f.post("/api/app/numbers", { label: "Ventas" }, a.cookie)
+    ).json()
+  ).id;
+  const req = { headers: { cookie: a.cookie } };
+  assert.throws(() =>
+    f.service.portal.authorizeNumbers(req, [other], "Unrelated"),
+  );
+  const principal = f.service.portal.authorizeNumbers(
+    req,
+    [first, second],
+    "QA",
+  );
+  const result = await f.service.tools.execute(
+    "whatsapp_account_list",
+    {},
+    principal,
+  );
+  assert.deepEqual(
+    JSON.parse(result.content[0].text)
+      .accounts.map((a) => a.id)
+      .sort(),
+    [first, second].sort(),
+  );
+  assert(
+    (
+      await f.service.tools.execute(
+        "whatsapp_account_status",
+        { account: other },
+        principal,
+      )
+    ).isError,
+  );
+  assert.deepEqual(principal.permissions, ["read", "send"]);
+  const wake = f.service.portal.wake;
+  const rows = () =>
+    f.service.store.db.prepare("SELECT account,message FROM wake_queue").all();
+  const input = (id, chat) => ({
+    key: { id, remoteJid: chat },
+    message: { conversation: "local test" },
+  });
+  const jid = "15551112222@s.whatsapp.net";
+  const cfg = {
+    url: "https://agent.example.test/inbox",
+    contacts: [],
+    mode: "new",
+  };
+  wake.configure(principal.tokenHash, cfg);
+  const ingest = (account, id, live = true) =>
+    f.service.sessions.ingest(account, input(id, jid), live);
+  ingest(second, "1");
+  ingest(second, "1");
+  ingest(second, "2");
+  ingest(other, "3");
+  ingest(first, "history", false);
+  assert.deepEqual(
+    rows().map((r) => r.message),
+    ["1"],
+  );
+  wake.configure(principal.tokenHash, {
+    ...cfg,
+    mode: "contacts",
+    contacts: ["+15551112222"],
+  });
+  ingest(second, "4");
+  assert.deepEqual(
+    rows().map((r) => r.message),
+    ["4"],
+  );
+  const received = [];
+  const { Wake, signatureHeaders } = await import("../dist/wake.js");
+  await new Wake(f.service.store, async (_, event) =>
+    received.push(event),
+  ).drain();
+  assert.equal(received[0].account, second);
+  assert.equal(received[0].messageId, "4");
+  assert.equal(received[0].text, undefined);
+  assert(
+    signatureHeaders("test", "msg_1", "whsec_dGVzdA==")[
+      "webhook-signature"
+    ].startsWith("v1,"),
+  );
+  wake.configure(principal.tokenHash, null);
+  ingest(second, "5");
+  assert.equal(rows().length, 0);
+  f.service.access.revoke(principal.tokenHash);
+  assert.equal(f.service.access.resolve(principal), null);
+});
+
+test("2026 MCP serves discovery and authorized tools on the public transport", async (t) => {
+  const f = await portalFixture(t),
+    u = await f.register("modern@example.test");
+  const key = await (
+    await f.post(
+      "/api/app/agents",
+      { name: "Client", permissions: ["read", "send"] },
+      u.cookie,
+    )
+  ).json();
+  const version = "2026-07-28";
+  for (const [method, params] of [
+    ["server/discover", {}],
+    ["tools/list", {}],
+    ["tools/call", { name: "whatsapp_account_list", arguments: {} }],
+  ]) {
+    const response = await fetch(f.base + "/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: "Bearer " + key.token,
+        "MCP-Protocol-Version": version,
+        "Mcp-Method": method,
+        ...(params.name ? { "Mcp-Name": params.name } : {}),
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params: {
+          ...params,
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    });
+    const body = await response.text();
+    assert.equal(response.status, 200, body);
+    assert(!body.includes('"error":'), body);
+    if (method === "tools/list") assert(body.includes("whatsapp_message_send"));
+  }
+});

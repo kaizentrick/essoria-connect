@@ -99,7 +99,7 @@ test("HTTP and stdio speak standard MCP, share one daemon, and expose no account
   );
   assert.deepEqual(await (await fetch(base + "/health")).json(), {
     status: "ok",
-    version: "0.2.1",
+    version: "0.3.0",
   });
   const page = await fetch(base + "/");
   assert(

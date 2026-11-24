@@ -9,6 +9,7 @@ export type Principal = {
   name: string;
   permissions: Permission[];
   accountId?: string;
+  accountIds?: string[];
   epoch?: number;
   tokenHash?: string;
   credentialHash?: string;
@@ -40,6 +41,7 @@ export class Access {
     permissions: Permission[],
     days = 30,
     name = "Agent",
+    numbers?: string[],
   ): { token: string; id: string; expiresAt: number } {
     const account = this.store.account(accountId);
     if (
@@ -60,6 +62,10 @@ export class Access {
       id,
       {
         accountId: account.id,
+        numbers: numbers?.map((id) => ({
+          id,
+          epoch: this.store.account(id).epoch,
+        })),
         epoch: account.epoch,
         permissions,
         name,
@@ -77,6 +83,13 @@ export class Access {
     if (!record) return null;
     try {
       const account = this.store.account(record.accountId);
+      if (
+        record.numbers?.some(
+          (n: { id: string; epoch: number }) =>
+            this.store.account(n.id).epoch !== n.epoch,
+        )
+      )
+        return null;
       if (account.epoch !== record.epoch) return null;
       const row = this.store.db
         .prepare(
@@ -94,6 +107,7 @@ export class Access {
         accountId: account.id,
         epoch: account.epoch,
         permissions: record.permissions,
+        accountIds: record.numbers?.map((n: { id: string }) => n.id),
         tokenHash: id,
       };
     } catch {
@@ -110,6 +124,13 @@ export class Access {
     if (!record) return null;
     try {
       const account = this.store.account(record.accountId);
+      if (
+        record.numbers?.some(
+          (n: { id: string; epoch: number }) =>
+            this.store.account(n.id).epoch !== n.epoch,
+        )
+      )
+        return null;
       if (account.epoch !== record.epoch || account.id !== principal.accountId)
         return null;
       return {
@@ -124,6 +145,7 @@ export class Access {
   }
   tokens(accountId: string): {
     id: string;
+    numberIds: string[];
     name: string;
     permissions: Permission[];
     createdAt: number;
@@ -141,6 +163,9 @@ export class Access {
       if (v?.accountId === account.id && v.epoch === account.epoch)
         out.push({
           id: r.id,
+          numberIds: v.numbers?.map((n: { id: string }) => n.id) ?? [
+            account.id,
+          ],
           name: v.name ?? "Agent",
           permissions: v.permissions,
           createdAt: v.createdAt ?? 0,
@@ -151,6 +176,7 @@ export class Access {
     return out;
   }
   revoke(id: string): void {
+    this.store.remove("wake", "", id);
     this.store.remove("access-key", "", id);
   }
 }

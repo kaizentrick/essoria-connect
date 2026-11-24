@@ -1,3 +1,4 @@
+import { Wake, wakeSettings } from "./wake.js";
 import {
   randomBytes,
   randomUUID,
@@ -62,6 +63,7 @@ const safeEqual = (a: string, b: string) =>
 export class Portal {
   readonly router = express.Router();
   readonly billing: Billing;
+  readonly wake: Wake;
   private limits = new Map<string, { count: number; until: number }>();
   constructor(
     readonly store: Store,
@@ -73,12 +75,15 @@ export class Portal {
   ) {
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS customers(id TEXT PRIMARY KEY,email TEXT UNIQUE,name TEXT,password TEXT,salt TEXT,recovery TEXT,account TEXT UNIQUE,created INTEGER,trial_until INTEGER,stripe_customer TEXT UNIQUE,stripe_subscription TEXT,billing_state TEXT DEFAULT 'beta',paid_until INTEGER DEFAULT 0,terms_version TEXT);
+  CREATE TABLE IF NOT EXISTS company_numbers(customer TEXT REFERENCES customers(id) ON DELETE CASCADE, account TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE);
   CREATE TABLE IF NOT EXISTS web_sessions(id TEXT PRIMARY KEY,user_id TEXT REFERENCES customers(id) ON DELETE CASCADE,expires INTEGER);
   CREATE TABLE IF NOT EXISTS billing_events(id TEXT PRIMARY KEY,processed INTEGER);
   CREATE TABLE IF NOT EXISTS billing_holds(id TEXT PRIMARY KEY,user_id TEXT REFERENCES customers(id) ON DELETE CASCADE,subscription TEXT,reason TEXT,created INTEGER);
   CREATE TABLE IF NOT EXISTS billing_checkouts(id TEXT PRIMARY KEY,user_id TEXT REFERENCES customers(id) ON DELETE CASCADE,identifier TEXT,created INTEGER);
   CREATE TABLE IF NOT EXISTS send_usage(account TEXT REFERENCES accounts(id) ON DELETE CASCADE,request_id TEXT,month TEXT,created INTEGER,PRIMARY KEY(account,request_id));
   CREATE TABLE IF NOT EXISTS support_requests(id TEXT PRIMARY KEY,email TEXT,message TEXT,created INTEGER);`);
+    this.wake = new Wake(store);
+    sessions.onIncoming = (a, m, n) => this.wake.enqueue(a, m, n);
     this.billing = new Billing(this, options);
     const route = (
       method: "get" | "post",
@@ -249,9 +254,10 @@ export class Portal {
           )
           .run(pwd, salt, hash(recovery), u.id);
         store.db.prepare("DELETE FROM web_sessions WHERE user_id=?").run(u.id);
-        store.updateAccount(u.account, {
-          epoch: store.account(u.account).epoch + 1,
-        });
+        for (const a of this.numbers(u))
+          store.updateAccount(a.id, {
+            epoch: a.epoch + 1,
+          });
       });
       this.newSession(u.id, res);
       res.json({
@@ -267,6 +273,19 @@ export class Portal {
       res.clearCookie("essoria_session", { path: "/" });
       res.json({ ok: true });
     });
+    route("post", "/api/app/numbers", (req, res) => {
+      const u = this.user(req);
+      const label = z.string().trim().min(1).max(64).parse(req.body.label);
+      const account = store.transaction(() => {
+        const a = store.createAccount("WA-" + randomUUID());
+        store.updateAccount(a.id, { label });
+        store.db
+          .prepare("INSERT INTO company_numbers VALUES(?,?)")
+          .run(u.id, a.id);
+        return store.account(a.id);
+      });
+      res.status(201).json(account);
+    });
     route("get", "/api/app/me", (req, res) => {
       const u = this.user(req);
       res.json({
@@ -277,7 +296,10 @@ export class Portal {
           trialUntil: u.trial_until,
         },
         account: store.account(u.account),
-        agents: access.tokens(u.account),
+        numbers: this.numbers(u),
+        agents: this.numbers(u)
+          .flatMap((a) => access.tokens(a.id))
+          .map((t) => ({ ...t, wake: this.wake.settings(t.id) })),
         billing: {
           ...this.billing.publicState(),
           state: u.billing_state,
@@ -288,7 +310,7 @@ export class Portal {
             !["canceled", "incomplete_expired"].includes(u.billing_state),
           hasCustomer: !!u.stripe_customer,
         },
-        usage: { requests: this.usage(u.account), monthlyLimit: 1000 },
+        usage: { requests: this.companyUsage(u), monthlyLimit: 1000 },
       });
     });
     route("post", "/api/app/tools", async (req, res) => {
@@ -302,20 +324,24 @@ export class Portal {
               "whatsapp_account_disconnect",
               "whatsapp_account_logout",
             ]),
+            account: z.string().optional(),
             confirm: z.boolean().optional(),
           })
           .strict()
           .parse(req.body);
+      const selected = v.account ?? u.account;
+      if (!this.numbers(u).some((a) => a.id === selected))
+        throw new Error("Número no disponible");
       res.json(
         await tools.execute(
           v.name,
           {
-            account: u.account,
+            account: selected,
             ...(v.name === "whatsapp_account_logout"
               ? { confirm: v.confirm }
               : {}),
           },
-          this.principal(u),
+          this.principal({ ...u, account: selected }),
         ),
       );
     });
@@ -324,6 +350,7 @@ export class Portal {
         v = z
           .object({
             name: z.string().trim().min(1).max(60),
+            account: z.string().optional(),
             permissions: z
               .array(z.enum(["read", "send", "manage"]))
               .min(1)
@@ -333,16 +360,34 @@ export class Portal {
           .parse(req.body);
       if (!v.permissions.includes("read"))
         throw new Error("La clave debe incluir lectura.");
-      if (access.tokens(u.account).length >= 5)
+      const selected = v.account ?? u.account;
+      if (!this.numbers(u).some((a) => a.id === selected))
+        throw new Error("Número no disponible");
+      if (access.tokens(selected).length >= 5)
         throw new Error(
           "Puedes mantener hasta cinco claves activas. Revoca una para crear otra.",
         );
-      const issued = access.issue(u.account, v.permissions, 30, v.name);
+      const issued = access.issue(selected, v.permissions, 30, v.name);
       res.status(201).json({
         ...issued,
         endpoint: config.publicUrl + "/mcp",
         codeModeEndpoint: config.publicUrl + "/mcp/code",
       });
+    });
+    route("post", "/api/app/agents/wake", (req, res) => {
+      const u = this.user(req);
+      const v = z
+        .object({ id: z.string(), settings: wakeSettings.nullable() })
+        .strict()
+        .parse(req.body);
+      if (
+        !this.numbers(u).some((a) =>
+          access.tokens(a.id).some((t) => t.id === v.id),
+        )
+      )
+        throw new Error("Conexión no disponible");
+      this.wake.configure(v.id, v.settings);
+      res.json({ ok: true });
     });
     route("post", "/api/app/agents/revoke", (req, res) => {
       const u = this.user(req),
@@ -350,7 +395,11 @@ export class Portal {
           .object({ id: z.string().regex(/^[a-f0-9]{64}$/) })
           .strict()
           .parse(req.body);
-      if (!access.tokens(u.account).some((t) => t.id === v.id))
+      if (
+        !this.numbers(u).some((a) =>
+          access.tokens(a.id).some((t) => t.id === v.id),
+        )
+      )
         throw new Error("Clave no encontrada.");
       access.revoke(v.id);
       res.json({ ok: true });
@@ -380,27 +429,29 @@ export class Portal {
       )
         throw new Error("Contraseña incorrecta.");
       await this.billing.cancelForDeletion(u);
-      let remoteUnlinked = false;
-      try {
-        await sessions.logout(u.account);
-        remoteUnlinked = true;
-      } catch {
-        await sessions.disconnect(u.account).catch(() => {});
+      let remoteUnlinked = true;
+      for (const a of this.numbers(u)) {
+        try {
+          await sessions.logout(a.id);
+        } catch {
+          remoteUnlinked = false;
+          await sessions.disconnect(a.id).catch(() => {});
+        }
+        for (const k of access.tokens(a.id)) access.revoke(k.id);
+        store.transaction(() => {
+          for (const table of [
+            "aliases",
+            "contacts",
+            "chats",
+            "messages",
+            "receipts",
+          ])
+            store.db.prepare(`DELETE FROM ${table} WHERE account=?`).run(a.id);
+          store.db.prepare("DELETE FROM slots WHERE account=?").run(a.id);
+          store.db.prepare("DELETE FROM accounts WHERE id=?").run(a.id);
+        });
       }
-      for (const k of access.tokens(u.account)) access.revoke(k.id);
       store.transaction(() => {
-        for (const table of [
-          "aliases",
-          "contacts",
-          "chats",
-          "messages",
-          "receipts",
-        ])
-          store.db
-            .prepare(`DELETE FROM ${table} WHERE account=?`)
-            .run(u.account);
-        store.db.prepare("DELETE FROM slots WHERE account=?").run(u.account);
-        store.db.prepare("DELETE FROM accounts WHERE id=?").run(u.account);
         store.db.prepare("DELETE FROM customers WHERE id=?").run(u.id);
       });
       res.clearCookie("essoria_session", { path: "/" });
@@ -451,6 +502,25 @@ export class Portal {
       );
     return u;
   }
+  numbers(u: any) {
+    return [
+      this.store.account(u.account),
+      ...this.store.db
+        .prepare(
+          "SELECT account FROM company_numbers WHERE customer=? ORDER BY rowid",
+        )
+        .all(u.id)
+        .map((r) => this.store.account(String(r.account))),
+    ];
+  }
+  authorizeNumbers(req: Request, ids: string[], name: string) {
+    const u = this.user(req),
+      owned = this.numbers(u);
+    if (!ids.length || ids.some((id) => !owned.some((a) => a.id === id)))
+      throw new Error("Selecciona números de tu empresa");
+    const issued = this.access.issue(ids[0]!, ["read", "send"], 30, name, ids);
+    return this.access.identify(issued.token);
+  }
   principal(u: any): Principal {
     const a = this.store.account(u.account);
     return {
@@ -487,8 +557,10 @@ export class Portal {
   guard(name: string, p: Principal): void {
     if (p.role === "owner" || !p.accountId) return;
     const u = this.store.db
-      .prepare("SELECT * FROM customers WHERE account=?")
-      .get(p.accountId) as any;
+      .prepare(
+        "SELECT * FROM customers WHERE account=? OR id IN (SELECT customer FROM company_numbers WHERE account=?)",
+      )
+      .get(p.accountId, p.accountId) as any;
     if (!u) return;
     if (/message_send|media_send|pairing_start/.test(name)) {
       if (!this.entitled(u))
@@ -526,10 +598,15 @@ export class Portal {
       ).n,
     );
   }
+  companyUsage(u: any): number {
+    return this.numbers(u).reduce((sum, a) => sum + this.usage(a.id), 0);
+  }
   checkSend(account: string, requestId: string): void {
     const u = this.store.db
-      .prepare("SELECT * FROM customers WHERE account=?")
-      .get(account) as any;
+      .prepare(
+        "SELECT * FROM customers WHERE account=? OR id IN (SELECT customer FROM company_numbers WHERE account=?)",
+      )
+      .get(account, account) as any;
     if (!u) return;
     this.store.transaction(() => {
       if (!this.entitled(u))
@@ -542,7 +619,7 @@ export class Portal {
           .get(account, requestId)
       )
         return;
-      if (this.usage(account) >= 1000)
+      if (this.companyUsage(u) >= 1000)
         throw new Error(
           "La cuenta alcanzó 1000 solicitudes de envío este mes.",
         );
