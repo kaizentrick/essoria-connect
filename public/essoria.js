@@ -639,11 +639,12 @@
         <label>Clave del webhook de Cursor <input name="cursorKey" type="password" autocomplete="off" spellcheck="false">
           <small>En el disparador Webhook de Cursor, pulsa <b>Generate auth header</b> y luego <b>Copy auth header</b>. Pega aquí la cabecera completa.</small></label>
         <label>Firma del receptor (opcional) <input name="signingKey" type="password" autocomplete="off"></label>
+        <label hidden><input type="checkbox" name="clearSignature"> Quitar la firma guardada</label>
         <p role="alert" hidden></p><button type="submit">Guardar avisos</button>
       </form>`;
     card.append(panel);
     const form = panel.querySelector("form");
-    const { mode, url, contacts, cursorKey, signingKey } = form.elements;
+    const { mode, url, contacts, cursorKey, signingKey, clearSignature } = form.elements;
     mode.value = saved?.mode ?? "off";
     contacts.value = saved?.contacts.join(", ") ?? "";
     if (saved) url.placeholder = "Guardado en " + saved.host;
@@ -662,11 +663,13 @@
         [url, active],
         [contacts, active && mode.value === "contacts"],
         [cursorKey, active && cursor],
-        [signingKey, active && !cursor],
+        [clearSignature, active && !cursor && saved?.hasSigningKey],
+        [signingKey, active && !cursor && !clearSignature.checked],
       ]) {
         field.disabled = !visible;
         field.closest("label").hidden = !visible;
       }
+      signingKey.placeholder = saved?.hasSigningKey && !url.value.trim() ? "Firma guardada" : "";
       url.required = active && !saved;
       contacts.required = !contacts.disabled;
       cursorKey.required =
@@ -675,6 +678,7 @@
         saved?.hasCursorKey && !url.value.trim() ? "Clave guardada" : "";
     }
     mode.onchange = showFields;
+    clearSignature.onchange = showFields;
     url.oninput = showFields;
     showFields();
     form.onsubmit = async (e) => {
@@ -704,7 +708,7 @@
                     : undefined,
                   signingKey: cursorDestination()
                     ? undefined
-                    : signingKey.value || undefined,
+                    : clearSignature.checked ? "" : signingKey.value || undefined,
                 },
         });
         await load();

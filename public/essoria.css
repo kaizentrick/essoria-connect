@@ -1371,3 +1371,4 @@ dialog [role=alert]:empty {display:none}
 
 .wake-config small{display:block;margin-top:6px;color:var(--muted);font-weight:400}
 .wake-config [role="alert"]{color:#ffbdab}
+#workspace-content .wake-config input[type="checkbox"]{display:inline-block;width:auto;min-height:0;margin:0 .4em 0 0}

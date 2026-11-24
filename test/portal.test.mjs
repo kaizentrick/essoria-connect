@@ -894,12 +894,16 @@ test("Cursor automation wakes use the saved webhook key, preserve filters and is
   assert.match(event.context, /MCP/);
   assert(!calls[0].body.includes("contenido privado"));
   assert.equal(
-    (await set({ ...data, url: "https://example.test/generic" })).status,
+    (await set({ ...data, url: "https://example.test/generic", signingKey: "fixture-signature" })).status,
     200,
   );
   ingest(contact.slice(1), "generic");
   await worker.drain();
   assert.equal(calls[2].headers.Authorization, undefined);
+  assert(calls[2].headers["X-Essoria-Signature"]);
+  assert.equal((await me()).agents[0].wake.hasSigningKey, true);
+  assert.equal((await set({ mode: "all", contacts: [], signingKey: "" })).status, 200);
+  assert.equal((await me()).agents[0].wake.hasSigningKey, undefined);
   assert.equal((await set(null)).status, 200);
   ingest(contact.slice(1), "off");
   await worker.drain();

@@ -232,6 +232,7 @@ export class Wake {
       contacts: s.contacts,
       host: url.hostname,
       ...(isCursorWebhook(url) ? { hasCursorKey: !!s.cursorKey } : {}),
+      ...(s.signingKey ? { hasSigningKey: true } : {}),
     };
   }
   enqueue(account: string, m: StoredMessage, newChat: boolean) {
