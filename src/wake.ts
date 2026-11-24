@@ -8,13 +8,36 @@ import type { Store, StoredMessage } from "./store.js";
 
 export const wakeSettings = z
   .object({
-    url: z.string().url().max(2048),
+    url: z.string().url().max(2048).optional(),
+    cursorKey: z.string().max(4096).optional(),
     mode: z.enum(["all", "new", "contacts"]),
     contacts: z.array(z.string().regex(/^\+?[1-9]\d{5,14}$/)).max(100),
     signingKey: z.string().max(256).optional(),
   })
   .strict();
-type Settings = z.infer<typeof wakeSettings>;
+type SettingsInput = z.infer<typeof wakeSettings>;
+type Settings = SettingsInput & { url: string };
+
+function isCursorWebhook(url: URL) {
+  return (
+    url.origin === "https://api2.cursor.sh" &&
+    /^\/automations\/webhook\/[A-Za-z0-9_-]+\/?$/.test(url.pathname) &&
+    !url.search
+  );
+}
+
+function cursorToken(input: string) {
+  if (/[\r\n]/.test(input))
+    throw new Error("Pega únicamente la cabecera de autorización de Cursor.");
+  const token = input
+    .trim()
+    .replace(/^(?:Authorization:[ \t]*)?Bearer[ \t]+/i, "");
+  if (!/^[A-Za-z0-9._~+/-]+=*$/.test(token))
+    throw new Error(
+      "Copia la clave del webhook desde tu automatización de Cursor.",
+    );
+  return token;
+}
 export function receiver(value: string) {
   const u = new URL(value);
   if (
@@ -112,16 +135,30 @@ export async function postWebhook(
     req.end(body);
   });
 }
-async function deliver(
+export async function deliverWake(
   s: Settings,
   event: { eventId: unknown; [key: string]: unknown },
+  post = postWebhook,
 ) {
-  const body = JSON.stringify(event);
-  const response = await postWebhook(
-    s.url,
-    body,
-    signatureHeaders(body, String(event.eventId), s.signingKey),
+  const cursor = isCursorWebhook(receiver(s.url));
+  const id = String(event.eventId);
+  const body = JSON.stringify(
+    cursor
+      ? {
+          ...event,
+          context:
+            "Llegó un WhatsApp. Consulta el mensaje en Essoria por MCP con los campos account, chat y messageId de este aviso.",
+        }
+      : event,
   );
+  let headers: Record<string, string>;
+  if (cursor) {
+    if (!s.cursorKey) throw new Error("Falta la clave del webhook de Cursor.");
+    headers = { Authorization: "Bearer " + s.cursorKey, "Idempotency-Key": id };
+  } else {
+    headers = signatureHeaders(body, id, s.signingKey);
+  }
+  const response = await post(s.url, body, headers);
   if (response.status < 200 || response.status >= 300)
     throw new Error("Receptor no confirmó");
 }
@@ -131,7 +168,7 @@ export class Wake {
   private running?: Promise<void>;
   constructor(
     private store: Store,
-    private send = deliver,
+    private send = deliverWake,
   ) {
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS wake_queue(id TEXT PRIMARY KEY,connection TEXT,account TEXT REFERENCES accounts(id) ON DELETE CASCADE,chat TEXT,message TEXT,attempt INTEGER,due INTEGER); CREATE INDEX IF NOT EXISTS wake_due ON wake_queue(due)",
@@ -152,11 +189,31 @@ export class Wake {
       )
     );
   }
-  configure(id: string, settings: Settings | null) {
-    if (settings) {
-      receiver(settings.url);
-      if (settings.mode === "contacts" && !settings.contacts.length)
+  configure(id: string, input: SettingsInput | null) {
+    let settings: Settings | null = null;
+    if (input) {
+      const saved = this.store.get<Settings>("wake", "", id);
+      const address = input.url ?? saved?.url;
+      if (!address) throw new Error("Pega la URL del webhook de tu agente.");
+      const url = receiver(address);
+      const previous =
+        saved && receiver(saved.url).href === url.href ? saved : undefined;
+      if (input.mode === "contacts" && !input.contacts.length)
         throw new Error("Indica al menos un contacto.");
+      settings = { url: url.href, mode: input.mode, contacts: input.contacts };
+      if (isCursorWebhook(url)) {
+        if (input.signingKey)
+          throw new Error("Cursor necesita la clave de su webhook.");
+        const key = input.cursorKey ?? previous?.cursorKey;
+        if (!key) throw new Error("Falta la clave del webhook de Cursor.");
+        settings.cursorKey = cursorToken(key);
+      } else {
+        if (url.hostname === "api2.cursor.sh" || input.cursorKey)
+          throw new Error(
+            "Pega la URL completa del webhook de Cursor Automations.",
+          );
+        settings.signingKey = input.signingKey ?? previous?.signingKey;
+      }
     }
     this.store.transaction(() => {
       this.store.db
@@ -168,9 +225,14 @@ export class Wake {
   }
   settings(id: string) {
     const s = this.store.get<Settings>("wake", "", id);
-    return s
-      ? { mode: s.mode, contacts: s.contacts, host: receiver(s.url).hostname }
-      : null;
+    if (!s) return null;
+    const url = receiver(s.url);
+    return {
+      mode: s.mode,
+      contacts: s.contacts,
+      host: url.hostname,
+      ...(isCursorWebhook(url) ? { hasCursorKey: !!s.cursorKey } : {}),
+    };
   }
   enqueue(account: string, m: StoredMessage, newChat: boolean) {
     const chat = this.store.canonical(account, m.chatId);
@@ -201,9 +263,13 @@ export class Wake {
     }
   }
   async drain() {
-    for (const r of this.store.db
-      .prepare("SELECT * FROM wake_queue WHERE due<=? ORDER BY due LIMIT 10")
+    const queued = this.store.db.prepare("SELECT * FROM wake_queue WHERE id=?");
+    for (const row of this.store.db
+      .prepare("SELECT id FROM wake_queue WHERE due<=? ORDER BY due LIMIT 10")
       .all(Date.now())) {
+      // A settings change may discard other queued events while a delivery is in flight.
+      const r = queued.get(row.id!);
+      if (!r) continue;
       const id = String(r.connection),
         s = this.store.get<Settings>("wake", "", id);
       try {
