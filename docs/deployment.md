@@ -123,7 +123,7 @@ volume across replicas or mount its WAL database on a network filesystem.
 
 La web y las cuentas de cliente están en `/` y `/app`. `/operator` es una consola global separada y requiere la clave del operador; no la entregues a clientes. `/registro` crea una cuenta y un número si `ESSORIA_SIGNUP_OPEN=true`; por defecto está cerrado. `ESSORIA_MAX_CUSTOMERS` limita la capacidad de la beta (25 por defecto). El despliegue pequeño de Kaizen Core usa 10 plazas y memoria máxima de 600 MiB. Nunca presentes ese límite como capacidad medida de clientes simultáneos.
 
-`ESSORIA_COMMERCIAL_READY` es falso por defecto. Los secretos y verificaciones de la marca se describen en [billing.md](billing.md). Una prueba caducada impide nueva vinculación y envíos; la persona puede consultar su estado, revocar y eliminar su cuenta. Las claves caducan en 30 días. El código de recuperación se muestra una vez; no se promete correo de recuperación si no hay proveedor configurado.
+`ESSORIA_COMMERCIAL_READY` es falso por defecto. Los secretos y verificaciones de la marca se describen en [billing.md](billing.md). Una prueba caducada impide nueva vinculación y envíos; la persona puede consultar su estado, revocar y eliminar su cuenta. Las claves caducan en 30 días. El registro inicia sesión directamente. Las consultas de acceso se reciben en /contacto.
 
 El formulario de contacto guarda consultas reales en `support_requests`; no envía correo. El operador debe revisar esa tabla privada con su referencia, correo y mensaje. Los registros no se publican ni se ofrecen a herramientas de cliente.
 

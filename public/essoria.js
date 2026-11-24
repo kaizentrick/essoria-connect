@@ -7,9 +7,7 @@
     qrTimer = null,
     expiryTimer = null,
     qrSequence = 0,
-    qrController = null,
-    agentSecret = null,
-    recovery = null;
+    qrController = null;
   const escape = (s) =>
     String(s ?? "").replace(
       /[&<>"']/g,
@@ -64,8 +62,6 @@
   }
   function expireSession(message) {
     stopQR();
-    agentSecret = null;
-    recovery = null;
     me = null;
     const target = byId("workspace-content");
     if (target) {
@@ -96,40 +92,27 @@
       return false;
     }
   }
-  function download(value, name) {
-    const url = URL.createObjectURL(
-        new Blob([value + "\n"], { type: "text/plain" }),
-      ),
-      a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 500);
-  }
-  function showRecovery(value) {
-    recovery = value;
-    byId("recovery-value").textContent = value;
-    byId("recovery-result").hidden = false;
-    byId("recovery-result").scrollIntoView({ block: "nearest" });
-    const heading = byId("recovery-result").querySelector("h2,h3");
-    if (heading) {
-      heading.tabIndex = -1;
-      heading.focus();
+  document.addEventListener("click", async (e) => {
+    const button = e.target.closest?.("[data-guide-copy]");
+    if (!button) return;
+    try {
+      await navigator.clipboard.writeText(
+        button.previousElementSibling.textContent,
+      );
+      button.textContent = "Copiado";
+    } catch {
+      button.textContent = "Selecciona y copia el texto de arriba";
     }
-    byId("copy-recovery").onclick = () => copy(recovery);
-    byId("download-recovery").onclick = () =>
-      download(recovery, "essoria-recuperacion.txt");
-  }
-  window.addEventListener("pagehide", () => {
-    agentSecret = null;
-    recovery = null;
-    for (const id of ["agent-secret", "recovery-value"])
-      if (byId(id)) byId(id).textContent = "";
-    for (const id of ["secret-result", "recovery-result"])
-      if (byId(id)) byId(id).hidden = true;
   });
   const auth = byId("auth-form");
   if (auth) {
+    const pending = new URLSearchParams(location.search).get("oauth");
+    if (pending)
+      document
+        .querySelectorAll(
+          '.auth-links a[href="/registro"],.auth-links a[href="/entrar"]',
+        )
+        .forEach((a) => (a.search = new URLSearchParams({ oauth: pending })));
     auth.addEventListener("submit", async (e) => {
       e.preventDefault();
       const button = auth.querySelector("button[type=submit]");
@@ -139,25 +122,17 @@
         const v = Object.fromEntries(new FormData(auth));
         if (auth.dataset.mode === "registro")
           v.acceptedTerms = auth.elements.acceptedTerms.checked;
-        const endpoint = {
-            entrar: "login",
-            registro: "register",
-            recuperar: "recover",
-          }[auth.dataset.mode],
-          result = await request("/api/app/" + endpoint, v);
-        auth.elements.password.value = "";
-        if (result.recoveryCode) {
-          showRecovery(result.recoveryCode);
-          button.hidden = true;
-          notice("Cuenta lista. Guarda el código antes de continuar.");
-        } else {
-          const pending = new URLSearchParams(location.search).get("oauth");
-          location.assign(
-            pending
-              ? "/oauth/choose?request=" + encodeURIComponent(pending)
-              : "/app",
-          );
-        }
+        await request(
+          "/api/app/" +
+            (auth.dataset.mode === "registro" ? "register" : "login"),
+          v,
+        );
+        const pending = new URLSearchParams(location.search).get("oauth");
+        location.assign(
+          pending
+            ? "/oauth/choose?request=" + encodeURIComponent(pending)
+            : "/app/conexiones",
+        );
       } catch (error) {
         notice(error.message);
       } finally {
@@ -336,44 +311,71 @@
         account.label ||
         displayNumber(account) ||
         (index === 0 ? "Número principal" : "Número " + (index + 1));
-      content.innerHTML = `
-        <div class="section-bar"><h2>Conexiones</h2><button id="toggle-number" class="secondary" aria-expanded="false" aria-controls="add-number">＋ Añadir número</button></div>
-        <form id="add-number" class="number-form" hidden><label>Nombre del número<input required maxlength="64" name="label" placeholder="Por ejemplo, Ventas"></label><button>Añadir</button></form>
+      const selected = me.numbers.find(
+        (n) => n.id === new URLSearchParams(location.search).get("instancia"),
+      );
+      if (!selected) {
+        content.innerHTML = `<div class="section-bar"><h2>Instancias</h2><button id="toggle-number" aria-expanded="false" aria-controls="add-number">＋ Nueva instancia</button></div>
+        <form id="add-number" class="number-form" hidden><label>Nombre de la instancia<input required maxlength="64" name="label" placeholder="Por ejemplo, Ventas"></label><button>Crear instancia</button></form>
+        <div class="instance-filters"><input type="search" id="find-instance" aria-label="Buscar instancia" placeholder="Buscar por nombre o teléfono"><select id="filter-instance" aria-label="Estado"><option value="">Todos los estados</option><option value="open">Conectadas</option><option value="other">Sin conexión</option></select></div>
+        <div class="instance-grid">${me.numbers.map((n, i) => `<a class="instance-card" href="/app/conexiones?instancia=${encodeURIComponent(n.id)}" data-state="${escape(n.state)}"><strong>${escape(name(n, i))}</strong><span>${escape(displayNumber(n) || "Sin teléfono vinculado")}</span><small class="wa-status">${escape(stateText(n.state))}</small></a>`).join("")}</div><p id="no-results" hidden>No hay instancias que coincidan.</p>`;
+        const filter = () => {
+          let visible = 0;
+          for (const card of content.querySelectorAll(".instance-card")) {
+            const state = byId("filter-instance").value;
+            card.hidden =
+              !card.textContent
+                .toLowerCase()
+                .includes(byId("find-instance").value.trim().toLowerCase()) ||
+              (state === "open" && card.dataset.state !== "open") ||
+              (state === "other" && card.dataset.state === "open");
+            if (!card.hidden) visible++;
+          }
+          byId("no-results").hidden = visible > 0;
+        };
+        byId("find-instance").oninput = filter;
+        byId("filter-instance").onchange = filter;
+        byId("toggle-number").onclick = () => {
+          const form = byId("add-number");
+          form.hidden = !form.hidden;
+          byId("toggle-number").setAttribute(
+            "aria-expanded",
+            String(!form.hidden),
+          );
+          if (!form.hidden) form.elements.label.focus();
+        };
+        byId("add-number").onsubmit = async (e) => {
+          e.preventDefault();
+          const submit = e.currentTarget.querySelector("button");
+          submit.disabled = true;
+          try {
+            const a = await request("/api/app/numbers", {
+              label: new FormData(e.target).get("label"),
+            });
+            location.assign(
+              "/app/conexiones?instancia=" + encodeURIComponent(a.id),
+            );
+          } catch (err) {
+            submit.disabled = false;
+            notice(err.message);
+          }
+        };
+        return;
+      }
+      me.account = selected;
+      sessionStorage.setItem("essoriaNumber", selected.id);
+      content.innerHTML = `<a class="back-instances" href="/app/conexiones">← Instancias</a>
         <section class="wa-card">
-          <header class="wa-heading"><div class="wa-brand"><img src="/assets/platforms/whatsapp.svg" alt="" width="32" height="32"><h3>WhatsApp</h3></div><span class="wa-status" id="phone-state">${escape(stateText(me.account.state))}</span></header>
-          <label class="number-field" for="number-select">Número de la empresa</label>
-          <select id="number-select">${me.numbers.map((a, i) => `<option value="${escape(a.id)}" ${a.id === me.account.id ? "selected" : ""}>${escape(name(a, i))}</option>`).join("")}</select>
+          <header class="wa-heading"><div class="wa-brand"><img src="/assets/platforms/whatsapp.svg" alt="" width="32" height="32"><h3>${escape(
+            name(
+              me.account,
+              me.numbers.findIndex((n) => n.id === me.account.id),
+            ),
+          )}</h3></div><span class="wa-status" id="phone-state">${escape(stateText(me.account.state))}</span></header>
           <div class="pair-actions"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular con QR"}</button><button id="copy-continuation" class="text-action" type="button">Copiar enlace para otra pantalla</button></div>
           <section id="pairing-output" hidden aria-labelledby="scan-title"><div class="scan-copy"><h3 id="scan-title">Escanea el código</h3><p>En tu teléfono, abre WhatsApp y ve a <strong>Dispositivos vinculados → Vincular un dispositivo</strong>.</p><p id="pairing-state" role="status">Preparando el QR…</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></div><img id="pairing-qr" width="240" height="240" alt="Código QR para vincular el número seleccionado" hidden></section>
           <details class="connection-details"><summary>Detalles y ajustes</summary><dl class="account-state"><dt>Teléfono</dt><dd id="phone-identity">${escape(displayNumber(me.account) || "Sin vincular")}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pause-phone" type="button" class="secondary">Pausar conexión</button><button id="unlink-phone" type="button" class="secondary">Desvincular teléfono</button></div></details>
         </section><a class="agent-next" href="/app/agentes"><span><strong>Conectar un agente</strong><small>Elige qué números podrá leer y responder.</small></span><span aria-hidden="true">→</span></a>`;
-      byId("toggle-number").onclick = () => {
-        const form = byId("add-number");
-        form.hidden = !form.hidden;
-        byId("toggle-number").setAttribute(
-          "aria-expanded",
-          String(!form.hidden),
-        );
-        if (!form.hidden) form.elements.label.focus();
-      };
-      byId("number-select").onchange = async (e) => {
-        stopQR();
-        sessionStorage.setItem("essoriaNumber", e.target.value);
-        await load();
-      };
-      byId("add-number").onsubmit = async (e) => {
-        e.preventDefault();
-        try {
-          const a = await request("/api/app/numbers", {
-            label: new FormData(e.target).get("label"),
-          });
-          sessionStorage.setItem("essoriaNumber", a.id);
-          stopQR();
-          await load();
-        } catch (err) {
-          notice(err.message);
-        }
-      };
       byId("copy-continuation").onclick = () =>
         copy(location.origin + "/app/conexiones");
       if (!me.billing.accessActive) {
@@ -435,72 +437,21 @@
         byId("pair-phone").focus();
       };
     } else if (route === "/app/agentes") {
-      content.innerHTML = `<h2>Tus agentes y sus permisos</h2><p>Añade la URL MCP a tu agente, elige OAuth e inicia sesión en Essoria para seleccionar los números que podrá leer y responder. Para clientes que requieren Bearer, crea una clave.</p><p>Endpoint MCP: <code>${escape(location.origin + "/mcp")}</code><br>Code Mode: <code>${escape(location.origin + "/mcp/code")}</code></p><button id="refresh-agents" type="button" class="secondary">Actualizar uso observado</button><div id="agent-list" class="agent-scroll"></div><form id="agent-form" class="agent-form"><label for="agent-name">Nombre de tu agente</label><input id="agent-name" name="name" required maxlength="60" autocomplete="off"><fieldset><legend>Clave alternativa para ${escape(me.account.label ?? me.account.name)}</legend><label class="check-row"><input type="checkbox" name="read" checked disabled> Lectura de tu cuenta, chats, contactos y grupos</label><label class="check-row"><input type="checkbox" name="send" checked> Enviar mensajes y archivos</label><label class="check-row"><input type="checkbox" name="manage"> Gestionar la sesión y desvincular el teléfono</label></fieldset><button type="submit">Crear clave de agente</button></form><section id="secret-result" class="secret-output" hidden><h3>Guarda esta clave privada</h3><p>Caduca en 30 días. No se volverá a mostrar. No la pegues en una URL ni en una conversación pública.</p><code id="agent-secret"></code><div class="control-row"><button id="copy-agent" type="button">Copiar clave</button><button id="download-agent" type="button" class="secondary">Descargar clave</button><button id="hide-agent" type="button" class="secondary">Ya la guardé, ocultar</button></div><p>Crea la conexión en tu cliente MCP y empieza listando tu cuenta. Una clave creada o copiada no equivale a una conexión observada.</p></section><p><a href="/agentes">Guía y ejemplos para clientes MCP →</a></p>`;
-      renderAgents();
-      byId("refresh-agents").onclick = async () => {
-        try {
-          me = await request("/api/app/me");
-          me.account =
-            me.numbers?.find(
-              (a) => a.id === sessionStorage.getItem("essoriaNumber"),
-            ) ?? me.account;
-          renderAgents();
-          notice(
-            "Uso actualizado. Solo mostramos peticiones autenticadas observadas.",
-          );
-        } catch (e) {
-          notice(e.message);
-        }
-      };
-      byId("agent-form").onsubmit = async (e) => {
-        e.preventDefault();
-        const form = e.currentTarget,
-          b = form.querySelector("button");
-        b.disabled = true;
-        try {
-          const permissions = ["read"];
-          if (form.elements.send.checked) permissions.push("send");
-          if (form.elements.manage.checked) permissions.push("manage");
-          const r = await request("/api/app/agents", {
-            name: form.elements.name.value,
-            account: me.account.id,
-            permissions,
-          });
-          agentSecret = r.token;
-          byId("agent-secret").textContent = agentSecret;
-          byId("secret-result").hidden = false;
-          me = await request("/api/app/me");
-          me.account =
-            me.numbers?.find(
-              (a) => a.id === sessionStorage.getItem("essoriaNumber"),
-            ) ?? me.account;
-          renderAgents();
-          notice(
-            "Clave creada. Aún no se ha observado una petición de tu agente.",
-          );
-          byId("secret-result").scrollIntoView({ block: "nearest" });
-        } catch (error) {
-          notice(error.message);
-        } finally {
-          b.disabled = false;
-        }
-      };
-      byId("copy-agent").onclick = () => copy(agentSecret);
-      byId("download-agent").onclick = () =>
-        download(agentSecret, "essoria-agente.token");
-      byId("hide-agent").onclick = () => {
-        agentSecret = null;
-        byId("agent-secret").textContent = "";
-        byId("secret-result").hidden = true;
-        byId("agent-name").focus();
-      };
+      content.replaceChildren(byId("agent-guide").content.cloneNode(true));
     } else if (route === "/app/facturacion") {
-      content.innerHTML = `<h2>Tu plan y facturación</h2><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco claves de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(paymentStateText(me.billing.state, me.user.trialUntil))}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><p>Volver desde Stripe no confirma un pago. El acceso se actualiza al recibir y verificar su estado en el servidor.</p><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div>`;
+      content.innerHTML = `<h2>Tu plan y facturación</h2><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco conexiones de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(paymentStateText(me.billing.state, me.user.trialUntil))}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><p>Volver desde Stripe no confirma un pago. El acceso se actualiza al recibir y verificar su estado en el servidor.</p><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div>`;
       byId("checkout").onclick = () => goBilling("/api/app/checkout");
       byId("billing-portal").onclick = () =>
         goBilling("/api/app/billing/portal");
     } else {
-      content.innerHTML = `<h2>Mi cuenta</h2><p>${escape(me.user.name)} · ${escape(me.user.email)}</p><h3>Recuperación de acceso</h3><p>Tu código de recuperación se mostró al registrarte. Si lo tienes, puedes restablecer el acceso y revocar las sesiones y claves anteriores. Si no lo guardaste, contacta al equipo.</p><a href="/recuperar">Usar mi código de recuperación →</a><h3>Eliminar mi cuenta</h3><p>Esta acción cierra sesiones, revoca agentes y elimina la conexión y los registros locales. Si existe una suscripción, se cancelará. Si WhatsApp no responde, tendrás que retirar el dispositivo desde el teléfono. Las copias de recuperación cifradas pueden conservar datos previos hasta 30 días.</p><form id="delete-form" class="app-form"><label for="delete-password">Confirma tu contraseña</label><input id="delete-password" name="password" type="password" minlength="8" required autocomplete="current-password"><label for="delete-word">Escribe ELIMINAR</label><input id="delete-word" name="confirm" required pattern="ELIMINAR" autocomplete="off"><button class="danger" type="submit">Eliminar mi cuenta y sus datos</button></form>`;
+      content.innerHTML = `<h2>Mi cuenta</h2><p>${escape(me.user.name)} · ${escape(me.user.email)}</p><h3>Eliminar mi cuenta</h3><p>Esta acción cierra sesiones, revoca agentes y elimina la conexión y los registros locales. Si existe una suscripción, se cancelará. Si WhatsApp no responde, tendrás que retirar el dispositivo desde el teléfono. Las copias de recuperación cifradas pueden conservar datos previos hasta 30 días.</p><form id="delete-form" class="app-form"><label for="delete-password">Confirma tu contraseña</label><input id="delete-password" name="password" type="password" minlength="8" required autocomplete="current-password"><label for="delete-word">Escribe ELIMINAR</label><input id="delete-word" name="confirm" required pattern="ELIMINAR" autocomplete="off"><button class="danger" type="submit">Eliminar mi cuenta y sus datos</button></form>`;
+      if (me.agents.length) {
+        const settings = document.createElement("details");
+        settings.innerHTML =
+          '<summary>Conexiones autorizadas y avisos</summary><div id="agent-list"></div>';
+        content.querySelector("h3").before(settings);
+        renderAgents();
+      }
       byId("delete-form").onsubmit = async (e) => {
         e.preventDefault();
         const b = e.currentTarget.querySelector("button");
@@ -530,12 +481,11 @@
   function renderAgents() {
     const list = byId("agent-list");
     if (!me.agents.length) {
-      list.innerHTML =
-        "<p>No has creado claves. Ningún agente tiene acceso con una clave de esta cuenta.</p>";
+      list.innerHTML = "<p>Aún no hay agentes autorizados.</p>";
       return;
     }
     list.innerHTML =
-      '<table class="agent-table"><caption>Claves activas para tu cuenta</caption><thead><tr><th>Agente</th><th>Permisos</th><th>Uso observado / caducidad</th><th>Acción</th></tr></thead><tbody>' +
+      '<table class="agent-table"><caption>Agentes autorizados</caption><thead><tr><th>Agente</th><th>Permisos</th><th>Uso observado / caducidad</th><th>Acción</th></tr></thead><tbody>' +
       me.agents
         .map(
           (a) =>
@@ -597,7 +547,7 @@
           const a = me.agents.find((v) => v.id === b.dataset.revoke);
           if (
             !confirm(
-              "¿Revocar la clave de " +
+              "¿Revocar el acceso de " +
                 a.name +
                 "? Ese agente perderá el acceso; WhatsApp seguirá conectado.",
             )
@@ -605,19 +555,14 @@
             return;
           try {
             await request("/api/app/agents/revoke", { id: a.id });
-            if (agentSecret) {
-              agentSecret = null;
-              byId("agent-secret").textContent = "";
-              byId("secret-result").hidden = true;
-            }
             me = await request("/api/app/me");
             me.account =
               me.numbers?.find(
                 (a) => a.id === sessionStorage.getItem("essoriaNumber"),
               ) ?? me.account;
             renderAgents();
-            byId("agent-name").focus();
-            notice("Clave revocada. No se desconectó tu teléfono.");
+
+            notice("Conexión revocada. No se desconectó tu teléfono.");
           } catch (e) {
             notice(e.message);
           }
@@ -807,8 +752,6 @@
   });
   window.addEventListener("pagehide", () => {
     stopQR();
-    agentSecret = null;
-    recovery = null;
   });
   load().catch((e) => notice(e.message));
 })();

@@ -1300,3 +1300,18 @@ body[data-route^="/app"] .site-header {max-width:1100px}
 .workspace-panel {max-width:850px;margin-inline:auto}
 .workspace-panel .app-notice:empty {display:none}
 .workspace-panel .app-notice:not(:empty) {margin:0 0 16px;padding:10px 14px;border-radius:10px}
+.instance-filters {display:flex;gap:12px;margin:16px 0}
+.instance-filters input {flex:1;min-width:0}
+.instance-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,220px),1fr));gap:16px}
+.instance-card {display:grid;gap:10px;padding:20px;border:1px solid var(--edge);border-radius:15px;background:var(--panel);text-decoration:none;overflow-wrap:anywhere}
+.instance-card[hidden]{display:none}
+.instance-card span,.agent-guides p{color:var(--muted)}
+.instance-card .wa-status{justify-self:start}
+.instance-card[data-state="open"] .wa-status{background:#174b38;color:#adf5ce}
+.instance-card:hover,.instance-card:focus-visible{border-color:var(--action)}
+.back-instances{display:inline-block;margin-bottom:16px}
+.agent-guides{max-width:750px;display:grid;gap:10px;margin:18px 0 36px}
+.agent-guides details{padding:14px 18px;border:1px solid var(--line);border-radius:14px;background:#10282a}
+.agent-guides summary{cursor:pointer;font-weight:bold}
+.agent-guides .guide-value{padding:12px;border-radius:8px;background:#081b1d;color:var(--ink);overflow-wrap:anywhere}
+@media(max-width:480px){.instance-filters{flex-wrap:wrap}.instance-filters input{flex-basis:100%}}

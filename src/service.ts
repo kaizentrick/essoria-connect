@@ -72,9 +72,7 @@ export class Service {
         this.portal.numbers(this.portal.user(req)),
       authorizeNumbers: (req: Request, ids: string[], name: string) =>
         this.portal.authorizeNumbers(req, ids, name),
-      adminToken: config.adminToken,
       storePath: join(config.dataDir, "oauth.sqlite"),
-      identify: async (key: string) => this.access.identify(key),
       resolvePrincipal: async (p: Principal) => this.access.resolve(p),
     });
     this.app.disable("x-powered-by");

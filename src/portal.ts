@@ -74,7 +74,7 @@ export class Portal {
     readonly options: PortalOptions = portalOptions(),
   ) {
     store.db
-      .exec(`CREATE TABLE IF NOT EXISTS customers(id TEXT PRIMARY KEY,email TEXT UNIQUE,name TEXT,password TEXT,salt TEXT,recovery TEXT,account TEXT UNIQUE,created INTEGER,trial_until INTEGER,stripe_customer TEXT UNIQUE,stripe_subscription TEXT,billing_state TEXT DEFAULT 'beta',paid_until INTEGER DEFAULT 0,terms_version TEXT);
+      .exec(`CREATE TABLE IF NOT EXISTS customers(id TEXT PRIMARY KEY,email TEXT UNIQUE,name TEXT,password TEXT,salt TEXT,account TEXT UNIQUE,created INTEGER,trial_until INTEGER,stripe_customer TEXT UNIQUE,stripe_subscription TEXT,billing_state TEXT DEFAULT 'beta',paid_until INTEGER DEFAULT 0,terms_version TEXT);
   CREATE TABLE IF NOT EXISTS company_numbers(customer TEXT REFERENCES customers(id) ON DELETE CASCADE, account TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE);
   CREATE TABLE IF NOT EXISTS web_sessions(id TEXT PRIMARY KEY,user_id TEXT REFERENCES customers(id) ON DELETE CASCADE,expires INTEGER);
   CREATE TABLE IF NOT EXISTS billing_events(id TEXT PRIMARY KEY,processed INTEGER);
@@ -84,6 +84,28 @@ export class Portal {
   CREATE TABLE IF NOT EXISTS support_requests(id TEXT PRIMARY KEY,email TEXT,message TEXT,created INTEGER);`);
     this.wake = new Wake(store);
     sessions.onIncoming = (a, m, n) => this.wake.enqueue(a, m, n);
+    // Retire manual customer keys, including grants derived from them. Preserve OAuth connections.
+    if (!store.get("meta", "", "customer-oauth-only-v1"))
+      store.transaction(() => {
+        for (const user of store.db
+          .prepare("SELECT id,account FROM customers")
+          .all())
+          for (const account of this.numbers(user))
+            for (const key of access.tokens(account.id))
+              if (
+                !store.get<{ numbers?: unknown }>("access-key", "", key.id)
+                  ?.numbers
+              )
+                access.revoke(key.id);
+        if (
+          store.db
+            .prepare("PRAGMA table_info(customers)")
+            .all()
+            .some((c) => c.name === "recovery")
+        )
+          store.db.exec("ALTER TABLE customers DROP COLUMN recovery");
+        store.put("meta", "", "customer-oauth-only-v1", true);
+      });
     this.billing = new Billing(this, options);
     const route = (
       method: "get" | "post",
@@ -173,7 +195,6 @@ export class Portal {
           .parse(req.body),
         id = randomUUID(),
         salt = token(),
-        recovery = "essoria-recovery-" + token(),
         pwd = (await passwordHash(value.password, salt)).toString("hex");
       if (
         store.db
@@ -181,7 +202,7 @@ export class Portal {
           .get(value.email)
       )
         throw new Error(
-          "No se pudo crear la cuenta. Si ya tienes acceso, inicia sesión o usa tu código de recuperación.",
+          "No se pudo crear la cuenta. Si ya tienes acceso, inicia sesión.",
         );
       store.transaction(() => {
         const max = options.maxCustomers ?? 25;
@@ -197,7 +218,7 @@ export class Portal {
         const account = store.createAccount("Cuenta-" + id.slice(0, 12));
         store.db
           .prepare(
-            "INSERT INTO customers(id,email,name,password,salt,recovery,account,created,trial_until,terms_version) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO customers(id,email,name,password,salt,account,created,trial_until,terms_version) VALUES(?,?,?,?,?,?,?,?,?)",
           )
           .run(
             id,
@@ -205,7 +226,6 @@ export class Portal {
             value.name,
             pwd,
             salt,
-            hash(recovery),
             account.id,
             Date.now(),
             Date.now() + 7 * 86400000,
@@ -213,11 +233,7 @@ export class Portal {
           );
       });
       this.newSession(id, res);
-      res.status(201).json({
-        recoveryCode: recovery,
-        message:
-          "Guarda este código: es necesario para recuperar tu cuenta. No volverá a mostrarse.",
-      });
+      res.status(201).json({ ok: true });
     });
     route("post", "/api/app/login", async (req, res) => {
       this.rate(req, "login", 20, 900000);
@@ -232,39 +248,6 @@ export class Portal {
         throw new Error("Correo o contraseña incorrectos.");
       this.newSession(u.id, res);
       res.json({ ok: true });
-    });
-    route("post", "/api/app/recover", async (req, res) => {
-      this.rate(req, "recover", 10, 900000);
-      const v = credentials
-          .extend({ recoveryCode: z.string().min(20).max(150) })
-          .strict()
-          .parse(req.body),
-        u = store.db
-          .prepare("SELECT * FROM customers WHERE email=?")
-          .get(v.email) as any;
-      if (!u || !safeEqual(hash(v.recoveryCode), u.recovery))
-        throw new Error("No se pudo recuperar la cuenta con esos datos.");
-      const salt = token(),
-        pwd = (await passwordHash(v.password, salt)).toString("hex"),
-        recovery = "essoria-recovery-" + token();
-      store.transaction(() => {
-        store.db
-          .prepare(
-            "UPDATE customers SET password=?,salt=?,recovery=? WHERE id=?",
-          )
-          .run(pwd, salt, hash(recovery), u.id);
-        store.db.prepare("DELETE FROM web_sessions WHERE user_id=?").run(u.id);
-        for (const a of this.numbers(u))
-          store.updateAccount(a.id, {
-            epoch: a.epoch + 1,
-          });
-      });
-      this.newSession(u.id, res);
-      res.json({
-        recoveryCode: recovery,
-        message:
-          "Se cerraron las demás sesiones y se revocaron las claves anteriores.",
-      });
     });
     route("post", "/api/app/logout", (req, res) => {
       const s = this.cookie(req);
@@ -344,35 +327,6 @@ export class Portal {
           this.principal({ ...u, account: selected }),
         ),
       );
-    });
-    route("post", "/api/app/agents", async (req, res) => {
-      const u = this.user(req),
-        v = z
-          .object({
-            name: z.string().trim().min(1).max(60),
-            account: z.string().optional(),
-            permissions: z
-              .array(z.enum(["read", "send", "manage"]))
-              .min(1)
-              .max(3),
-          })
-          .strict()
-          .parse(req.body);
-      if (!v.permissions.includes("read"))
-        throw new Error("La clave debe incluir lectura.");
-      const selected = v.account ?? u.account;
-      if (!this.numbers(u).some((a) => a.id === selected))
-        throw new Error("Número no disponible");
-      if (access.tokens(selected).length >= 5)
-        throw new Error(
-          "Puedes mantener hasta cinco claves activas. Revoca una para crear otra.",
-        );
-      const issued = access.issue(selected, v.permissions, 30, v.name);
-      res.status(201).json({
-        ...issued,
-        endpoint: config.publicUrl + "/mcp",
-        codeModeEndpoint: config.publicUrl + "/mcp/code",
-      });
     });
     route("post", "/api/app/agents/wake", (req, res) => {
       const u = this.user(req);
