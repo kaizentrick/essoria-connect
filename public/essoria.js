@@ -298,7 +298,7 @@
   const states = {
     disconnected: "Sin vincular",
     connecting: "Conectando",
-    qr: "Esperando el QR",
+    qr: "Pendiente de escaneo",
     open: "Conectado",
     reconnecting: "Reconectando",
     paused: "Pausado",
@@ -322,13 +322,40 @@
     document
       .querySelectorAll(".workspace-nav a")
       .forEach((a) =>
-        a.setAttribute("aria-current", a.pathname === route ? "page" : "false"),
+        a.setAttribute(
+          "aria-current",
+          a.pathname === (route === "/app" ? "/app/conexiones" : route)
+            ? "page"
+            : "false",
+        ),
       );
     if (route === "/app" || route === "/app/conexiones") {
-      content.innerHTML = `<h2 class="connection-title"><img src="/assets/platforms/whatsapp.svg" width="44" height="44" alt="">Tu conexión de WhatsApp</h2><p class="instructions">WhatsApp sigue en tu teléfono. Para mostrar y escanear el QR necesitas otra pantalla. Abre esta misma página en un ordenador o tableta e inicia sesión allí.</p><button id="copy-continuation" class="secondary" type="button">Copiar enlace para otra pantalla</button><dl class="account-state"><dt>Cuenta</dt><dd>${escape(me.account.name)}</dd><dt>Número</dt><dd id="phone-identity">${escape(me.account.selfJid || "Todavía sin vincular")}</dd><dt>Conexión</dt><dd id="phone-state">${escape(stateText(me.account.state))}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular o reanudar"}</button><button id="pause-phone" type="button" class="secondary">Pausar</button><button id="unlink-phone" type="button" class="secondary">Desvincular</button></div><section id="pairing-output" hidden><h3>Vincula el dispositivo</h3><p id="pairing-state" role="status">Esperando una respuesta…</p><img id="pairing-qr" width="300" height="300" alt="QR privado para vincular WhatsApp" hidden><p>En el teléfono: WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></section><h3>Después, conecta tu agente</h3><p>Añade la URL MCP a tu agente e inicia sesión para elegir sus números. Guardar una configuración no demuestra que el agente ya tenga acceso.</p><a href="/app/agentes">Ir a mis agentes →</a><h3>Otras redes</h3><p>Instagram y Facebook están previstas. Todavía no se pide acceso a esas cuentas.</p>`;
-      const selector = document.createElement("section");
-      selector.innerHTML = `<label>Número de la empresa <select id="number-select">${me.numbers.map((a) => `<option value="${escape(a.id)}" ${a.id === me.account.id ? "selected" : ""}>${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</option>`).join("")}</select></label><form id="add-number"><label>Nombre del nuevo número <input required maxlength="64" name="label"></label><button>Añadir número</button></form>`;
-      content.prepend(selector);
+      const displayNumber = (account) =>
+        account.selfJid?.split("@")[0].split(":")[0];
+      const name = (account, index) =>
+        account.label ||
+        displayNumber(account) ||
+        (index === 0 ? "Número principal" : "Número " + (index + 1));
+      content.innerHTML = `
+        <div class="section-bar"><h2>Conexiones</h2><button id="toggle-number" class="secondary" aria-expanded="false" aria-controls="add-number">＋ Añadir número</button></div>
+        <form id="add-number" class="number-form" hidden><label>Nombre del número<input required maxlength="64" name="label" placeholder="Por ejemplo, Ventas"></label><button>Añadir</button></form>
+        <section class="wa-card">
+          <header class="wa-heading"><div class="wa-brand"><img src="/assets/platforms/whatsapp.svg" alt="" width="32" height="32"><h3>WhatsApp</h3></div><span class="wa-status" id="phone-state">${escape(stateText(me.account.state))}</span></header>
+          <label class="number-field" for="number-select">Número de la empresa</label>
+          <select id="number-select">${me.numbers.map((a, i) => `<option value="${escape(a.id)}" ${a.id === me.account.id ? "selected" : ""}>${escape(name(a, i))}</option>`).join("")}</select>
+          <div class="pair-actions"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular con QR"}</button><button id="copy-continuation" class="text-action" type="button">Copiar enlace para otra pantalla</button></div>
+          <section id="pairing-output" hidden aria-labelledby="scan-title"><div class="scan-copy"><h3 id="scan-title">Escanea el código</h3><p>En tu teléfono, abre WhatsApp y ve a <strong>Dispositivos vinculados → Vincular un dispositivo</strong>.</p><p id="pairing-state" role="status">Preparando el QR…</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></div><img id="pairing-qr" width="240" height="240" alt="Código QR para vincular el número seleccionado" hidden></section>
+          <details class="connection-details"><summary>Detalles y ajustes</summary><dl class="account-state"><dt>Teléfono</dt><dd id="phone-identity">${escape(displayNumber(me.account) || "Sin vincular")}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pause-phone" type="button" class="secondary">Pausar conexión</button><button id="unlink-phone" type="button" class="secondary">Desvincular teléfono</button></div></details>
+        </section><a class="agent-next" href="/app/agentes"><span><strong>Conectar un agente</strong><small>Elige qué números podrá leer y responder.</small></span><span aria-hidden="true">→</span></a>`;
+      byId("toggle-number").onclick = () => {
+        const form = byId("add-number");
+        form.hidden = !form.hidden;
+        byId("toggle-number").setAttribute(
+          "aria-expanded",
+          String(!form.hidden),
+        );
+        if (!form.hidden) form.elements.label.focus();
+      };
       byId("number-select").onchange = async (e) => {
         stopQR();
         sessionStorage.setItem("essoriaNumber", e.target.value);
@@ -359,10 +386,14 @@
       }
       byId("pair-phone").onclick = async () => {
         try {
+          const number = me.account.id;
           notice("Iniciando la conexión…");
           await tool("whatsapp_pairing_start");
+          if (number !== me.account.id) return;
+          byId("scan-title").textContent = "Escanea el código";
           byId("pairing-output").hidden = false;
           startQR();
+          byId("pairing-output").scrollIntoView({ block: "nearest" });
           notice("");
         } catch (e) {
           notice(e.message);
@@ -633,7 +664,9 @@
     if (byId("phone-state")) {
       byId("phone-state").textContent = stateText(me.account.state);
       byId("phone-identity").textContent =
-        me.account.selfJid || "Todavía sin vincular";
+        me.account.selfJid?.split("@")[0].split(":")[0] || "Sin vincular";
+      byId("pair-phone").textContent =
+        me.account.state === "open" ? "Comprobar conexión" : "Vincular con QR";
       byId("history-state").textContent = syncText(me.account.syncStatus);
     }
   }
@@ -716,7 +749,7 @@
             Math.max(0, d.expiresAt - Date.now()),
           );
           byId("pairing-state").textContent =
-            "Escanea este QR desde tu teléfono. Se renueva automáticamente.";
+            "El código se renueva automáticamente.";
         }
         byId("phone-state").textContent = "Esperando vinculación";
       } else {
@@ -732,6 +765,7 @@
           byId("pairing-state").textContent = text;
         byId("phone-state").textContent = stateText(d.state || "connecting");
         if (d.state === "open") {
+          byId("scan-title").textContent = "Dispositivo vinculado";
           clearInterval(qrTimer);
           qrTimer = null;
           await refreshState();
