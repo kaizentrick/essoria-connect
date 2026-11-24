@@ -660,3 +660,100 @@ test("downscoping a company connection removes its active read subscriptions", a
   assert.equal(events.status([p.tokenHash]).count, 0);
   assert.deepEqual(f.service.access.resolve(p).permissions, ["send"]);
 });
+
+test("agent consent survives parallel tabs and login in a second browser, with one decision per request", async (t) => {
+  const f = await portalFixture(t);
+  const origin = f.service.config.publicUrl;
+  const user = await f.register("agent-consent@example.test");
+  const primary = (await (await f.get("/api/app/me", user.cookie)).json())
+    .account.id;
+  const second = (
+    await (
+      await f.post("/api/app/numbers", { label: "Second" }, user.cookie)
+    ).json()
+  ).id;
+  const field = (html, name) =>
+    html.match(new RegExp('name="' + name + '" value="([^"]+)"'))[1];
+
+  async function review(response) {
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    return {
+      id: field(html, "request"),
+      proof: field(html, "proof"),
+      cookie: response.headers.get("set-cookie").split(";")[0],
+    };
+  }
+  async function begin(name) {
+    const callback = "https://" + name.toLowerCase() + ".example.test/callback";
+    const reg = await f.post("/register", {
+      client_name: name,
+      redirect_uris: [callback],
+      token_endpoint_auth_method: "none",
+    });
+    assert.equal(reg.status, 201);
+    const client = await reg.json();
+    const query = new URLSearchParams({
+      client_id: client.client_id,
+      redirect_uri: callback,
+      state: name,
+      response_type: "code",
+      code_challenge_method: "S256",
+      code_challenge: "a".repeat(43),
+    });
+    return review(await f.get("/authorize?" + query));
+  }
+  function accept(flow, cookie, number) {
+    return fetch(f.base + "/oauth/consent", {
+      method: "POST",
+      redirect: "manual",
+      headers: { origin, cookie: user.cookie + "; " + cookie },
+      body: new URLSearchParams({
+        request: flow.id,
+        proof: flow.proof,
+        company: "yes",
+        number,
+        send: "yes",
+      }),
+    });
+  }
+
+  const [grok, initialMuse] = await Promise.all([begin("Grok"), begin("Muse")]);
+  assert.notEqual(grok.cookie.split("=")[0], initialMuse.cookie.split("=")[0]);
+  const muse = await review(
+    await f.get("/oauth/choose?request=" + initialMuse.id, user.cookie),
+  );
+  assert.equal(muse.id, initialMuse.id);
+  assert.notEqual(muse.proof, initialMuse.proof);
+  const browser = [grok.cookie, muse.cookie].join("; ");
+  const mismatch = await accept(initialMuse, browser, second);
+  assert.equal(mismatch.status, 400);
+  assert((await mismatch.text()).includes("Revisar permisos"));
+  for (const [name, flow, number] of [
+    ["Grok", grok, primary],
+    ["Muse", muse, second],
+  ]) {
+    const response = await accept(flow, browser, number);
+    assert.equal(response.status, 303);
+    const redirect = new URL(response.headers.get("location"));
+    assert.equal(redirect.hostname, name.toLowerCase() + ".example.test");
+    assert.equal(redirect.searchParams.get("state"), name);
+    assert(redirect.searchParams.get("code"));
+    assert.equal(
+      response.headers.get("set-cookie").split("=")[0],
+      flow.cookie.split("=")[0],
+    );
+    assert.equal((await accept(flow, browser, number)).status, 400);
+  }
+  assert.equal(
+    (await accept(initialMuse, initialMuse.cookie, second)).status,
+    400,
+  );
+  const expired = await begin("Muse");
+  f.service.oauth.store.db
+    .prepare("UPDATE records SET expires=1 WHERE kind='pending' AND id=?")
+    .run(expired.id);
+  const response = await accept(expired, expired.cookie, second);
+  assert.equal(response.status, 400);
+  assert((await response.text()).includes("Esta solicitud ya terminó"));
+});

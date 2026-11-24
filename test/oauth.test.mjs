@@ -98,12 +98,13 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
     );
     const html = await res.text(),
       id = html.match(/entrar\?oauth=([a-zA-Z0-9_-]+)/)[1],
+      proof = html.match(/name="proof" value="([^"]+)"/)[1],
       cookie = res.headers.get("set-cookie").split(";")[0];
     assert.equal(
       (
         await form(
           "/oauth/consent",
-          { request: id, key: accessKey },
+          { request: id, proof, key: accessKey },
           { origin },
         )
       ).status,
@@ -113,7 +114,7 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
       (
         await form(
           "/oauth/consent",
-          { request: id, key: accessKey },
+          { request: id, proof, key: accessKey },
           { origin: "https://evil.invalid", cookie },
         )
       ).status,
@@ -123,6 +124,7 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
       "/oauth/consent",
       {
         request: id,
+        proof,
         company: "yes",
         number: a.id,
         ...(send ? { send: "yes", manage: "yes" } : {}),
