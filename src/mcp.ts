@@ -51,6 +51,12 @@ export class Tools {
     private guard?: (name: string, p: Principal) => void,
   ) {
     const scope = (a: any, p: Principal) => {
+      if (p.accountIds) {
+        const found = this.store.account(a.account);
+        if (!p.accountIds.includes(found.id))
+          throw new Error("This connection cannot access that account");
+        return found;
+      }
       if (p.accountId) {
         const own = this.store.account(p.accountId);
         if (a.account !== own.id && a.account !== own.name)
@@ -86,7 +92,11 @@ export class Tools {
         (_a, p) => ({
           accounts: this.store
             .accounts()
-            .filter((a) => !p.accountId || a.id === p.accountId),
+            .filter((a) =>
+              p.accountIds
+                ? p.accountIds.includes(a.id)
+                : !p.accountId || a.id === p.accountId,
+            ),
         }),
       ),
       spec(
@@ -421,11 +431,15 @@ export class Tools {
         "read",
         z.object({}).strict(),
         (_a, p) => ({
-          version: "0.2.1",
+          version: "0.3.0",
           status: "ok",
           accounts: this.store
             .accounts()
-            .filter((a) => !p.accountId || a.id === p.accountId)
+            .filter((a) =>
+              p.accountIds
+                ? p.accountIds.includes(a.id)
+                : !p.accountId || a.id === p.accountId,
+            )
             .map((a) => ({
               id: a.id,
               state: a.state,
@@ -486,7 +500,7 @@ export class Tools {
   }
   server(principal: Principal): Server {
     const server = new Server(
-      { name: "essoria", version: "0.2.1" },
+      { name: "essoria", version: "0.3.0" },
       {
         capabilities: { tools: {} },
         instructions:

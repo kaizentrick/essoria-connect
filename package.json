@@ -1,6 +1,6 @@
 {
   "name": "@kaizentrick/essoria",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Essoria: WhatsApp QR, own agents and account-scoped MCP connections",
   "type": "module",
   "private": true,
@@ -31,9 +31,12 @@
   "dependencies": {
     "@cfworker/json-schema": "4.1.4",
     "@cloudflare/codemode": "0.5.6",
+    "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/server": "2.4.0",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "express": "5.2.1",
+    "ipaddr.js": "2.2.0",
     "pino": "10.4.0",
     "qrcode": "1.5.4",
     "quickjs-emscripten": "0.32.0",

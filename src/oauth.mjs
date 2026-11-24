@@ -99,6 +99,9 @@ export function createOAuth({
   config,
   adminToken,
   identify,
+  companyNumbers,
+  authorizeNumbers,
+  revokeCompany,
   resolvePrincipal,
   storePath,
 }) {
@@ -214,7 +217,7 @@ export function createOAuth({
         path: "/",
         maxAge: 600000,
       });
-      consentPage(res, id, client, pending);
+      showConsent(res, id, client, pending);
     },
     async challengeForAuthorizationCode(client, code) {
       const r = store.get("code", digest(code));
@@ -304,6 +307,8 @@ export function createOAuth({
         if (r?.clientId === client.client_id) {
           const grant = store.get("grant", r.grantId);
           if (grant) {
+            if (grant.principal?.accountIds)
+              revokeCompany?.(grant.principal.tokenHash);
             grant.revoked = true;
             store.set("grant", r.grantId, grant, grant.expires);
           }
@@ -321,6 +326,22 @@ export function createOAuth({
       "X-Content-Type-Options": "nosniff",
     });
     next();
+  });
+  function showConsent(res, id, client, pending) {
+    let numbers;
+    try {
+      numbers = companyNumbers(res.req);
+    } catch {}
+    consentPage(res, id, client, pending, "", numbers);
+  }
+  app.get("/oauth/choose", (req, res) => {
+    const id = String(req.query.request ?? ""),
+      pending = store.get("pending", id);
+    if (!pending)
+      return res
+        .status(400)
+        .send("Solicitud expirada. Reconecta desde tu agente.");
+    showConsent(res, id, store.get("client", pending.clientId), pending);
   });
   app.use("/authorize", (_req, res, next) => {
     const redirect = res.redirect.bind(res);
@@ -399,7 +420,18 @@ export function createOAuth({
         return res.status(429).send("Too many attempts. Wait 15 minutes.");
       let principal;
       try {
-        principal = await identify(key);
+        if (req.body.company === "yes") {
+          const ids = [
+            ...new Set(
+              [req.body.number].flat().filter((v) => typeof v === "string"),
+            ),
+          ];
+          principal = await authorizeNumbers(
+            req,
+            ids,
+            String(client.client_name ?? "Agente MCP").slice(0, 60),
+          );
+        } else principal = await identify(key);
       } catch {}
       if (!principal) {
         const c =
@@ -465,7 +497,7 @@ export function createOAuth({
   return { app, provider, store, challenge, resource: RESOURCE };
 }
 
-function consentPage(res, id, client, pending, error = "") {
+function consentPage(res, id, client, pending, error = "", numbers) {
   const callbackOrigin = new URL(pending.params.redirectUri).origin;
   res.set(
     "Content-Security-Policy",
@@ -476,6 +508,6 @@ function consentPage(res, id, client, pending, error = "") {
   res
     .type("html")
     .send(
-      `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar agente · Essoria</title><style>body{font:16px system-ui;background:#081b1d;color:#e6f3ef;margin:0;padding:32px}main{max-width:480px;margin:8vh auto;background:#0e282b;padding:32px;border-radius:0;border:1px solid #325452}h1{font-size:26px}label{display:block;margin:20px 0 8px}input[type=password]{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #7aab9f;border-radius:0;background:#081b1d;color:#e6f3ef}button{margin-top:24px;width:100%;padding:13px;background:#5dd5c7;color:#062b28;border:0;border-radius:0;font:inherit}small{color:#b2c9c2}.error{color:#ffbcae}</style><main><h1>Conecta tu agente a Essoria</h1><p>Autorizar <strong>${escape(client.client_name ?? "Cliente MCP")}</strong>.</p><p><small>Callback: ${escape(new URL(pending.params.redirectUri).origin)}</small></p><p>Una clave de propietario permite todas las cuentas. La clave de una cuenta solo autoriza su propio número.</p>${error ? `<p class="error">${escape(error)}</p>` : ""}<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><label for="key">Clave de acceso</label><input id="key" type="password" name="key" required autocomplete="off"><label><input type="checkbox" checked disabled> Leer cuentas, chats, contactos y grupos</label>${send ? '<label><input type="checkbox" name="send" value="yes" checked> Permitir el envío de mensajes</label>' : ""}${manage ? '<label><input type="checkbox" name="manage" value="yes" checked> Permitir la vinculación y gestión de la cuenta</label>' : ""}<button type="submit">Autorizar conexión</button></form><p><small>La clave permanece en este servidor. Tu agente recibe una autorización que puedes revocar.</small></p></main></html>`,
+      `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar agente · Essoria</title><style>body{font:16px system-ui;background:#081b1d;color:#e6f3ef;margin:0;padding:32px}main{max-width:480px;margin:8vh auto;background:#0e282b;padding:32px;border-radius:0;border:1px solid #325452}h1{font-size:26px}label{display:block;margin:20px 0 8px}input[type=password]{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #7aab9f;border-radius:0;background:#081b1d;color:#e6f3ef}button{margin-top:24px;width:100%;padding:13px;background:#5dd5c7;color:#062b28;border:0;border-radius:0;font:inherit}small{color:#b2c9c2}.error{color:#ffbcae}</style><main><h1>Conecta tu agente a Essoria</h1><p>Autorizar <strong>${escape(client.client_name ?? "Cliente MCP")}</strong>.</p><p><small>Callback: ${escape(new URL(pending.params.redirectUri).origin)}</small></p>${numbers ? `<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><input type="hidden" name="company" value="yes"><input type="hidden" name="send" value="yes"><fieldset><legend>Números para esta conexión</legend>${numbers.map((a) => `<label><input type="checkbox" name="number" value="${escape(a.id)}"> ${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</label>`).join("")}</fieldset><p>El agente podrá leer ${send ? "y responder " : ""}en los números seleccionados.</p><button>Autorizar conexión</button></form>` : `<p><a style="color:#94eee1" href="/entrar?oauth=${encodeURIComponent(id)}">Iniciar sesión para elegir mis números</a></p>`}<details><summary>Conectar con una clave existente</summary><p>Una clave de propietario permite todas las cuentas. La clave de una cuenta solo autoriza su propio número.</p>${error ? `<p class="error">${escape(error)}</p>` : ""}<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><label for="key">Clave de acceso</label><input id="key" type="password" name="key" required autocomplete="off"><label><input type="checkbox" checked disabled> Leer cuentas, chats, contactos y grupos</label>${send ? '<label><input type="checkbox" name="send" value="yes" checked> Permitir el envío de mensajes</label>' : ""}${manage ? '<label><input type="checkbox" name="manage" value="yes" checked> Permitir la vinculación y gestión de la cuenta</label>' : ""}<button type="submit">Autorizar conexión</button></form><p><small>La clave permanece en este servidor. Tu agente recibe una autorización que puedes revocar.</small></p></details></main></html>`,
     );
 }

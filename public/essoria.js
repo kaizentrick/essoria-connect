@@ -150,7 +150,14 @@
           showRecovery(result.recoveryCode);
           button.hidden = true;
           notice("Cuenta lista. Guarda el código antes de continuar.");
-        } else location.assign("/app");
+        } else {
+          const pending = new URLSearchParams(location.search).get("oauth");
+          location.assign(
+            pending
+              ? "/oauth/choose?request=" + encodeURIComponent(pending)
+              : "/app",
+          );
+        }
       } catch (error) {
         notice(error.message);
       } finally {
@@ -303,6 +310,10 @@
   const stateText = (s) => states[s] || s;
   async function load() {
     me = await request("/api/app/me");
+    me.account =
+      me.numbers?.find(
+        (a) => a.id === sessionStorage.getItem("essoriaNumber"),
+      ) ?? me.account;
     byId("account-identity").textContent = me.user.name + " · " + me.user.email;
     render();
   }
@@ -314,7 +325,28 @@
         a.setAttribute("aria-current", a.pathname === route ? "page" : "false"),
       );
     if (route === "/app" || route === "/app/conexiones") {
-      content.innerHTML = `<h2 class="connection-title"><img src="/assets/platforms/whatsapp.svg" width="44" height="44" alt="">Tu conexión de WhatsApp</h2><p class="instructions">WhatsApp sigue en tu teléfono. Para mostrar y escanear el QR necesitas otra pantalla. Abre esta misma página en un ordenador o tableta e inicia sesión allí.</p><button id="copy-continuation" class="secondary" type="button">Copiar enlace para otra pantalla</button><dl class="account-state"><dt>Cuenta</dt><dd>${escape(me.account.name)}</dd><dt>Número</dt><dd id="phone-identity">${escape(me.account.selfJid || "Todavía sin vincular")}</dd><dt>Conexión</dt><dd id="phone-state">${escape(stateText(me.account.state))}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular o reanudar"}</button><button id="pause-phone" type="button" class="secondary">Pausar</button><button id="unlink-phone" type="button" class="secondary">Desvincular</button></div><section id="pairing-output" hidden><h3>Vincula el dispositivo</h3><p id="pairing-state" role="status">Esperando una respuesta…</p><img id="pairing-qr" width="300" height="300" alt="QR privado para vincular WhatsApp" hidden><p>En el teléfono: WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></section><h3>Después, conecta tu agente</h3><p>Una vez vinculado el teléfono, crea una clave limitada. Guardar una configuración no demuestra que el agente ya tenga acceso.</p><a href="/app/agentes">Ir a mis agentes →</a><h3>Otras redes</h3><p>Instagram y Facebook están previstas. Todavía no se pide acceso a esas cuentas.</p>`;
+      content.innerHTML = `<h2 class="connection-title"><img src="/assets/platforms/whatsapp.svg" width="44" height="44" alt="">Tu conexión de WhatsApp</h2><p class="instructions">WhatsApp sigue en tu teléfono. Para mostrar y escanear el QR necesitas otra pantalla. Abre esta misma página en un ordenador o tableta e inicia sesión allí.</p><button id="copy-continuation" class="secondary" type="button">Copiar enlace para otra pantalla</button><dl class="account-state"><dt>Cuenta</dt><dd>${escape(me.account.name)}</dd><dt>Número</dt><dd id="phone-identity">${escape(me.account.selfJid || "Todavía sin vincular")}</dd><dt>Conexión</dt><dd id="phone-state">${escape(stateText(me.account.state))}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular o reanudar"}</button><button id="pause-phone" type="button" class="secondary">Pausar</button><button id="unlink-phone" type="button" class="secondary">Desvincular</button></div><section id="pairing-output" hidden><h3>Vincula el dispositivo</h3><p id="pairing-state" role="status">Esperando una respuesta…</p><img id="pairing-qr" width="300" height="300" alt="QR privado para vincular WhatsApp" hidden><p>En el teléfono: WhatsApp → Dispositivos vinculados → Vincular un dispositivo.</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></section><h3>Después, conecta tu agente</h3><p>Añade la URL MCP a tu agente e inicia sesión para elegir sus números. Guardar una configuración no demuestra que el agente ya tenga acceso.</p><a href="/app/agentes">Ir a mis agentes →</a><h3>Otras redes</h3><p>Instagram y Facebook están previstas. Todavía no se pide acceso a esas cuentas.</p>`;
+      const selector = document.createElement("section");
+      selector.innerHTML = `<label>Número de la empresa <select id="number-select">${me.numbers.map((a) => `<option value="${escape(a.id)}" ${a.id === me.account.id ? "selected" : ""}>${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</option>`).join("")}</select></label><form id="add-number"><label>Nombre del nuevo número <input required maxlength="64" name="label"></label><button>Añadir número</button></form>`;
+      content.prepend(selector);
+      byId("number-select").onchange = async (e) => {
+        stopQR();
+        sessionStorage.setItem("essoriaNumber", e.target.value);
+        await load();
+      };
+      byId("add-number").onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const a = await request("/api/app/numbers", {
+            label: new FormData(e.target).get("label"),
+          });
+          sessionStorage.setItem("essoriaNumber", a.id);
+          stopQR();
+          await load();
+        } catch (err) {
+          notice(err.message);
+        }
+      };
       byId("copy-continuation").onclick = () =>
         copy(location.origin + "/app/conexiones");
       if (!me.billing.accessActive) {
@@ -372,11 +404,15 @@
         byId("pair-phone").focus();
       };
     } else if (route === "/app/agentes") {
-      content.innerHTML = `<h2>Tus agentes y sus permisos</h2><p>Hasta cinco claves activas por cuenta. Elige permisos antes de crear cada una; se mostrará una sola vez.</p><p>Endpoint MCP: <code>${escape(location.origin + "/mcp")}</code><br>Code Mode: <code>${escape(location.origin + "/mcp/code")}</code></p><button id="refresh-agents" type="button" class="secondary">Actualizar uso observado</button><div id="agent-list" class="agent-scroll"></div><form id="agent-form" class="agent-form"><label for="agent-name">Nombre de tu agente</label><input id="agent-name" name="name" required maxlength="60" autocomplete="off"><fieldset><legend>Permisos para ${escape(me.account.name)}</legend><label class="check-row"><input type="checkbox" name="read" checked disabled> Lectura de tu cuenta, chats, contactos y grupos</label><label class="check-row"><input type="checkbox" name="send"> Enviar mensajes y archivos</label><label class="check-row"><input type="checkbox" name="manage"> Gestionar la sesión y desvincular el teléfono</label></fieldset><button type="submit">Crear clave de agente</button></form><section id="secret-result" class="secret-output" hidden><h3>Guarda esta clave privada</h3><p>Caduca en 30 días. No se volverá a mostrar. No la pegues en una URL ni en una conversación pública.</p><code id="agent-secret"></code><div class="control-row"><button id="copy-agent" type="button">Copiar clave</button><button id="download-agent" type="button" class="secondary">Descargar clave</button><button id="hide-agent" type="button" class="secondary">Ya la guardé, ocultar</button></div><p>Crea la conexión en tu cliente MCP y empieza listando tu cuenta. Una clave creada o copiada no equivale a una conexión observada.</p></section><p><a href="/agentes">Guía y ejemplos para clientes MCP →</a></p>`;
+      content.innerHTML = `<h2>Tus agentes y sus permisos</h2><p>Añade la URL MCP a tu agente, elige OAuth e inicia sesión en Essoria para seleccionar los números que podrá leer y responder. Para clientes que requieren Bearer, crea una clave.</p><p>Endpoint MCP: <code>${escape(location.origin + "/mcp")}</code><br>Code Mode: <code>${escape(location.origin + "/mcp/code")}</code></p><button id="refresh-agents" type="button" class="secondary">Actualizar uso observado</button><div id="agent-list" class="agent-scroll"></div><form id="agent-form" class="agent-form"><label for="agent-name">Nombre de tu agente</label><input id="agent-name" name="name" required maxlength="60" autocomplete="off"><fieldset><legend>Clave alternativa para ${escape(me.account.label ?? me.account.name)}</legend><label class="check-row"><input type="checkbox" name="read" checked disabled> Lectura de tu cuenta, chats, contactos y grupos</label><label class="check-row"><input type="checkbox" name="send" checked> Enviar mensajes y archivos</label><label class="check-row"><input type="checkbox" name="manage"> Gestionar la sesión y desvincular el teléfono</label></fieldset><button type="submit">Crear clave de agente</button></form><section id="secret-result" class="secret-output" hidden><h3>Guarda esta clave privada</h3><p>Caduca en 30 días. No se volverá a mostrar. No la pegues en una URL ni en una conversación pública.</p><code id="agent-secret"></code><div class="control-row"><button id="copy-agent" type="button">Copiar clave</button><button id="download-agent" type="button" class="secondary">Descargar clave</button><button id="hide-agent" type="button" class="secondary">Ya la guardé, ocultar</button></div><p>Crea la conexión en tu cliente MCP y empieza listando tu cuenta. Una clave creada o copiada no equivale a una conexión observada.</p></section><p><a href="/agentes">Guía y ejemplos para clientes MCP →</a></p>`;
       renderAgents();
       byId("refresh-agents").onclick = async () => {
         try {
           me = await request("/api/app/me");
+          me.account =
+            me.numbers?.find(
+              (a) => a.id === sessionStorage.getItem("essoriaNumber"),
+            ) ?? me.account;
           renderAgents();
           notice(
             "Uso actualizado. Solo mostramos peticiones autenticadas observadas.",
@@ -396,12 +432,17 @@
           if (form.elements.manage.checked) permissions.push("manage");
           const r = await request("/api/app/agents", {
             name: form.elements.name.value,
+            account: me.account.id,
             permissions,
           });
           agentSecret = r.token;
           byId("agent-secret").textContent = agentSecret;
           byId("secret-result").hidden = false;
           me = await request("/api/app/me");
+          me.account =
+            me.numbers?.find(
+              (a) => a.id === sessionStorage.getItem("essoriaNumber"),
+            ) ?? me.account;
           renderAgents();
           notice(
             "Clave creada. Aún no se ha observado una petición de tu agente.",
@@ -467,10 +508,58 @@
       me.agents
         .map(
           (a) =>
-            `<tr><th>${escape(a.name)}</th><td>${escape(a.permissions.join(", "))}</td><td>${escape(date(a.lastUsedAt))}<br>Caduca: ${escape(date(a.expiresAt))}</td><td><button class="secondary" data-revoke="${a.id}" type="button" aria-label="Revocar ${escape(a.name)}">Revocar</button></td></tr>`,
+            `<tr><th>${escape(a.name)}</th><td>${escape(a.permissions.join(", "))}<br>${escape(
+              (a.numberIds ?? [])
+                .map((id) => {
+                  const n = me.numbers.find((n) => n.id === id);
+                  return n?.label ?? n?.selfJid ?? n?.name ?? id;
+                })
+                .join(", "),
+            )}</td><td>${escape(date(a.lastUsedAt))}<br>Caduca: ${escape(date(a.expiresAt))}</td><td><button class="secondary" data-revoke="${a.id}" type="button" aria-label="Revocar ${escape(a.name)}">Revocar</button></td></tr>`,
         )
         .join("") +
       "</tbody></table>";
+    const panel = document.createElement("section");
+    panel.innerHTML = `<h3>Avisos al agente</h3><p>Si tu agente proporciona una URL que inicia una ejecución, Essoria puede avisarle al llegar un mensaje. El agente consulta y responde por MCP. Si el cliente solo revisa periódicamente, conserva ese intervalo.</p><form id="wake-config"><label>Conexión <select name="id">${me.agents.map((a) => `<option value="${escape(a.id)}">${escape(a.name)} · ${a.wake ? "Avisos activos" : "Sin avisos"}</option>`).join("")}</select></label><label>Avisar por <select name="mode"><option value="off">Desactivado</option><option value="all">Cada mensaje entrante</option><option value="new">Primer mensaje de un chat</option><option value="contacts">Contactos específicos</option></select></label><label>URL HTTPS del agente <input name="url" type="url" autocomplete="off"></label><label>Contactos con código de país, separados por comas <input name="contacts"></label><label>Secreto de firma del receptor (para Grok, pega su secreto whsec_) <input name="signingKey" type="password" autocomplete="new-password"></label><button>Guardar avisos</button></form>`;
+    list.append(panel);
+    const form = byId("wake-config");
+    function showWake() {
+      const a = me.agents.find((a) => a.id === form.elements.id.value);
+      form.elements.mode.value = a.wake?.mode ?? "off";
+      form.elements.contacts.value = a.wake?.contacts.join(", ") ?? "";
+      form.elements.url.value = "";
+      form.elements.url.placeholder = a.wake
+        ? "Reintroduce la URL de " + a.wake.host
+        : "https://";
+      form.elements.signingKey.value = "";
+    }
+    form.elements.id.onchange = showWake;
+    showWake();
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(form));
+      try {
+        await request("/api/app/agents/wake", {
+          id: v.id,
+          settings:
+            v.mode === "off"
+              ? null
+              : {
+                  mode: v.mode,
+                  url: v.url,
+                  contacts: v.contacts
+                    .split(",")
+                    .map((n) => n.trim())
+                    .filter(Boolean),
+                  signingKey: v.signingKey,
+                },
+        });
+        await load();
+        notice("Configuración de avisos guardada.");
+      } catch (err) {
+        notice(err.message);
+      }
+    };
     list.querySelectorAll("[data-revoke]").forEach(
       (b) =>
         (b.onclick = async () => {
@@ -491,6 +580,10 @@
               byId("secret-result").hidden = true;
             }
             me = await request("/api/app/me");
+            me.account =
+              me.numbers?.find(
+                (a) => a.id === sessionStorage.getItem("essoriaNumber"),
+              ) ?? me.account;
             renderAgents();
             byId("agent-name").focus();
             notice("Clave revocada. No se desconectó tu teléfono.");
@@ -518,6 +611,7 @@
   async function tool(name, confirm) {
     const r = await request("/api/app/tools", {
       name,
+      account: me.account.id,
       ...(confirm === undefined ? {} : { confirm }),
     });
     if (r.isError) throw new Error(r.content[0].text);
@@ -532,6 +626,10 @@
   }
   async function refreshState() {
     me = await request("/api/app/me");
+    me.account =
+      me.numbers?.find(
+        (a) => a.id === sessionStorage.getItem("essoriaNumber"),
+      ) ?? me.account;
     if (byId("phone-state")) {
       byId("phone-state").textContent = stateText(me.account.state);
       byId("phone-identity").textContent =
@@ -575,7 +673,10 @@
       const res = await fetch("/api/app/tools", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "whatsapp_pairing_get" }),
+        body: JSON.stringify({
+          name: "whatsapp_pairing_get",
+          account: me.account.id,
+        }),
         cache: "no-store",
         signal: controller.signal,
       });

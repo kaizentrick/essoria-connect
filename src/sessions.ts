@@ -46,6 +46,11 @@ export class Sessions {
     private maxMediaBytes = 5 * 1024 * 1024,
     private beforeSend?: (account: string, requestId: string) => void,
   ) {}
+  onIncoming?: (
+    account: string,
+    message: StoredMessage,
+    newChat: boolean,
+  ) => void;
   async resume(): Promise<void> {
     for (const a of this.store.accounts())
       if (a.autoStart) await this.start(a.id).catch(() => {});
@@ -276,7 +281,12 @@ export class Sessions {
     ];
     for (let i = 0; i < messages.length; i++) {
       if (this.active.get(id) !== rt || rt.closed || this.stopped) return;
-      this.ingest(id, messages[i]);
+      this.ingest(
+        id,
+        messages[i],
+        i >= (history?.messages?.length ?? 0) &&
+          events["messages.upsert"]?.type === "notify",
+      );
       if (i % 100 === 99) {
         await yieldTurn();
         this.store.assertLease();
@@ -347,7 +357,7 @@ export class Sessions {
       this.retry(id, rt, code === DisconnectReason.restartRequired);
     }
   }
-  ingest(account: string, raw: any): void {
+  ingest(account: string, raw: any, live = false): void {
     const key = raw?.key;
     if (!key?.id || !key.remoteJid || !raw.message) return;
     const message = normalizeMessageContent(raw.message) ?? raw.message,
@@ -381,7 +391,31 @@ export class Sessions {
       status: key.fromMe ? "PENDING" : "RECEIVED",
       raw,
     };
-    this.store.saveMessage(account, stored);
+    if (
+      live &&
+      this.onIncoming &&
+      !stored.fromMe &&
+      /@(s\.whatsapp\.net|lid|g\.us)$/.test(stored.chatId) &&
+      ![
+        "protocolMessage",
+        "senderKeyDistributionMessage",
+        "reactionMessage",
+      ].includes(type)
+    ) {
+      this.store.transaction(() => {
+        const chat = this.store.canonical(account, stored.chatId);
+        const seen = this.store.db
+          .prepare(
+            "SELECT 1 FROM messages WHERE account=? AND chat=? AND id=? AND from_me=0",
+          )
+          .get(account, chat, stored.id);
+        const prior = this.store.db
+          .prepare("SELECT 1 FROM messages WHERE account=? AND chat=? LIMIT 1")
+          .get(account, chat);
+        this.store.saveMessage(account, stored);
+        if (!seen) this.onIncoming!(account, stored, !prior);
+      });
+    } else this.store.saveMessage(account, stored);
   }
   qr(nameOrId: string) {
     const a = this.store.account(nameOrId),
