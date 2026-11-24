@@ -4,6 +4,8 @@ import {
   randomBytes,
   randomUUID,
   createHash,
+  createHmac,
+  timingSafeEqual,
   hkdfSync,
   createCipheriv,
   createDecipheriv,
@@ -33,6 +35,50 @@ const escape = (s) =>
         c
       ],
   );
+
+const consentLifetime = 30 * 60;
+const legacyConsentCookie = "__Host-wa-mcp-oauth";
+const consentCookie = (id) => legacyConsentCookie + "-" + id;
+const consentCookieOptions = {
+  secure: true,
+  httpOnly: true,
+  sameSite: "lax",
+  path: "/",
+};
+
+function browserCookie(req, name) {
+  return (req.headers.cookie ?? "")
+    .split(";")
+    .map((s) => s.trim())
+    .find((s) => s.startsWith(name + "="))
+    ?.slice(name.length + 1);
+}
+
+function formProof(pending, cookie) {
+  return createHmac("sha256", pending.formKey)
+    .update(cookie)
+    .digest("base64url");
+}
+
+function matchesConsentBrowser(req, id, pending) {
+  if (!pending.formKey) {
+    // Accept forms rendered just before an upgrade until their original expiry.
+    const cookie = browserCookie(req, legacyConsentCookie);
+    return !!cookie && digest(cookie) === pending.csrf;
+  }
+  const cookie = browserCookie(req, consentCookie(id));
+  const proof = req.body.proof;
+  if (
+    !cookie ||
+    typeof proof !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(proof)
+  )
+    return false;
+  return timingSafeEqual(
+    Buffer.from(proof),
+    Buffer.from(formProof(pending, cookie)),
+  );
+}
 
 class Store {
   constructor(file, secret) {
@@ -236,27 +282,11 @@ export function createOAuth({
         throw new InvalidTargetError("Wrong resource");
       if (params.scopes?.some((x) => !SCOPES.includes(x)))
         throw new InvalidScopeError("Unsupported scope");
-      const id = random(),
-        csrf = random();
-      const pending = {
-        clientId: client.client_id,
-        params: {
-          ...params,
-          resource: params.resource?.href ?? RESOURCE,
-          scopes: params.scopes?.length ? params.scopes : SCOPES,
-        },
-        csrf: digest(csrf),
-      };
-      store.clean();
-      store.set("pending", id, pending, now() + 600);
-      res.cookie("__Host-wa-mcp-oauth", csrf, {
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 600000,
+      startConsent(res, client, {
+        ...params,
+        resource: params.resource?.href ?? RESOURCE,
+        scopes: params.scopes?.length ? params.scopes : SCOPES,
       });
-      showConsent(res, id, client, pending);
     },
     async challengeForAuthorizationCode(client, code) {
       const r = store.get("code", digest(code));
@@ -382,21 +412,39 @@ export function createOAuth({
     });
     next();
   });
-  function showConsent(res, id, client, pending) {
+  function startConsent(res, client, params) {
+    const id = random();
+    const pending = { clientId: client.client_id, params, formKey: random() };
+    store.clean();
+    store.set("pending", id, pending, now() + consentLifetime);
+    showConsent(res, id, client, pending);
+  }
+  function showConsent(res, id, client, pending, error = "") {
+    let proof = "";
+    if (pending.formKey) {
+      // Each browser reviews its own form, even when login opens outside the agent.
+      let cookie = browserCookie(res.req, consentCookie(id));
+      if (!cookie) {
+        cookie = random();
+        res.cookie(consentCookie(id), cookie, {
+          ...consentCookieOptions,
+          maxAge: consentLifetime * 1000,
+        });
+      }
+      proof = formProof(pending, cookie);
+    }
     let numbers;
     try {
       numbers = companyNumbers(res.req);
     } catch {}
-    consentPage(res, id, client, pending, "", numbers);
+    consentPage(res, id, client, pending, error, numbers, proof);
   }
   app.get("/oauth/choose", (req, res) => {
     const id = String(req.query.request ?? ""),
       pending = store.get("pending", id);
-    if (!pending)
-      return res
-        .status(400)
-        .send("Solicitud expirada. Reconecta desde tu agente.");
-    showConsent(res, id, store.get("client", pending.clientId), pending);
+    if (!pending) return consentProblem(res);
+    const client = store.get("client", pending.clientId);
+    showConsent(res, id, client, pending);
   });
   app.use("/authorize", (_req, res, next) => {
     const redirect = res.redirect.bind(res);
@@ -442,7 +490,7 @@ export function createOAuth({
       clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     }),
   );
-  function finishConsent(res, pending, result) {
+  function finishConsent(res, id, pending, result) {
     const redirect = new URL(pending.params.redirectUri);
     for (const [key, value] of Object.entries(result))
       redirect.searchParams.set(key, value);
@@ -453,12 +501,10 @@ export function createOAuth({
       "Content-Security-Policy",
       `default-src 'none'; form-action 'self' ${redirect.origin}; frame-ancestors 'none'; base-uri 'none'`,
     );
-    res.clearCookie("__Host-wa-mcp-oauth", {
-      secure: true,
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-    });
+    res.clearCookie(
+      pending.formKey ? consentCookie(id) : legacyConsentCookie,
+      consentCookieOptions,
+    );
     res.redirect(303, redirect.href);
   }
   const attempts = new Map();
@@ -475,24 +521,14 @@ export function createOAuth({
       const ip = req.ip,
         id = String(req.body.request ?? "");
       const pending = store.get("pending", id);
-      const cookie = String(req.headers.cookie ?? "")
-        .split(";")
-        .map((x) => x.trim())
-        .find((x) => x.startsWith("__Host-wa-mcp-oauth="))
-        ?.split("=")
-        .slice(1)
-        .join("=");
-      if (!pending || !cookie || digest(cookie) !== pending.csrf)
-        return res
-          .status(400)
-          .send(
-            "La solicitud venció. Vuelve al agente para iniciar una nueva conexión.",
-          );
+      if (!pending) return consentProblem(res);
+      if (!matchesConsentBrowser(req, id, pending))
+        return consentProblem(res, pending.formKey ? id : undefined);
       const client = store.get("client", pending.clientId);
       if (!client) return res.status(400).send("Client is not registered.");
       if (req.body.decision === "cancel") {
         store.delete("pending", id);
-        return finishConsent(res, pending, { error: "access_denied" });
+        return finishConsent(res, id, pending, { error: "access_denied" });
       }
       const count = attempts.get(ip);
       if (count && count.until > Date.now() && count.count >= 10)
@@ -524,19 +560,12 @@ export function createOAuth({
             : { count: 0, until: Date.now() + 900000 };
         c.count++;
         attempts.set(ip, c);
-        return consentPage(
+        return showConsent(
           res.status(401),
           id,
           client,
           pending,
           "Inicia sesión y selecciona al menos una instancia.",
-          (() => {
-            try {
-              return companyNumbers?.(req);
-            } catch {
-              return undefined;
-            }
-          })(),
         );
       }
       let scopes = pending.params.scopes.filter(
@@ -550,7 +579,8 @@ export function createOAuth({
       );
       if (!scopes.includes("whatsapp:read")) scopes.unshift("whatsapp:read");
       const code = random();
-      store.transaction(() => {
+      const issued = store.transaction(() => {
+        if (!store.get("pending", id)) return false;
         store.set(
           "code",
           digest(code),
@@ -566,11 +596,35 @@ export function createOAuth({
           now() + 120,
         );
         store.delete("pending", id);
+        return true;
       });
-      finishConsent(res, pending, { code });
+      if (!issued) {
+        if (principal.tokenHash) revokeCompany?.(principal.tokenHash);
+        return consentProblem(res);
+      }
+      finishConsent(res, id, pending, { code });
     },
   );
   return { app, provider, store, challenge, resource: RESOURCE };
+}
+
+function consentProblem(res, retryId) {
+  const title = retryId
+    ? "Vuelve a revisar los permisos"
+    : "Esta solicitud ya terminó";
+  const detail = retryId
+    ? "Abre el formulario en este navegador para elegir los números que quieres compartir."
+    : "Si tu agente sigue esperando, vuelve a él y elige conectar Essoria de nuevo.";
+  res.set(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  );
+  return res.status(400).type("html")
+    .send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Essoria</title>
+    <link rel="stylesheet" href="/assets/consent.css"></head><body><main>
+    <img class="brand" src="/assets/brand/essoria/logo-horizontal-dark.png" width="130" alt="Essoria">
+    <section><h1>${title}</h1><p>${detail}</p>${retryId ? `<footer><a class="primary" href="/oauth/choose?request=${encodeURIComponent(retryId)}">Revisar permisos</a></footer>` : ""}</section></main></body></html>`);
 }
 
 function numberOption(account, index, count) {
@@ -590,7 +644,7 @@ function numberOption(account, index, count) {
   </label>`;
 }
 
-function consentPage(res, id, client, pending, error = "", numbers) {
+function consentPage(res, id, client, pending, error, numbers, proof) {
   const callback = new URL(pending.params.redirectUri);
   const canSend = pending.params.scopes.includes("whatsapp:send");
   const clientName = escape(client.client_name || "tu agente");
@@ -610,6 +664,7 @@ function consentPage(res, id, client, pending, error = "", numbers) {
         <p>${numbers ? "Elige los números de WhatsApp que podrá usar." : "Inicia sesión en Essoria para elegir qué números de WhatsApp quieres compartir."}</p></header>
         <form method="post" action="/oauth/consent">
           <input type="hidden" name="request" value="${escape(id)}">
+          ${proof ? `<input type="hidden" name="proof" value="${escape(proof)}">` : ""}
           ${
             numbers
               ? `<input type="hidden" name="company" value="yes">
