@@ -378,6 +378,25 @@ export function createOAuth({
       clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     }),
   );
+  function finishConsent(res, pending, result) {
+    const redirect = new URL(pending.params.redirectUri);
+    for (const [key, value] of Object.entries(result))
+      redirect.searchParams.set(key, value);
+    redirect.searchParams.set("iss", issuer.href);
+    if (pending.params.state)
+      redirect.searchParams.set("state", pending.params.state);
+    res.set(
+      "Content-Security-Policy",
+      `default-src 'none'; form-action 'self' ${redirect.origin}; frame-ancestors 'none'; base-uri 'none'`,
+    );
+    res.clearCookie("__Host-wa-mcp-oauth", {
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+    });
+    res.redirect(303, redirect.href);
+  }
   const attempts = new Map();
   app.post(
     "/oauth/consent",
@@ -402,9 +421,15 @@ export function createOAuth({
       if (!pending || !cookie || digest(cookie) !== pending.csrf)
         return res
           .status(400)
-          .send("Request expired. Start the connection again from your agent.");
+          .send(
+            "La solicitud venció. Vuelve al agente para iniciar una nueva conexión.",
+          );
       const client = store.get("client", pending.clientId);
       if (!client) return res.status(400).send("Client is not registered.");
+      if (req.body.decision === "cancel") {
+        store.delete("pending", id);
+        return finishConsent(res, pending, { error: "access_denied" });
+      }
       const count = attempts.get(ip);
       if (count && count.until > Date.now() && count.count >= 10)
         return res.status(429).send("Too many attempts. Wait 15 minutes.");
@@ -472,37 +497,62 @@ export function createOAuth({
         );
         store.delete("pending", id);
       });
-      res.set(
-        "Content-Security-Policy",
-        `default-src 'none'; form-action 'self' ${new URL(pending.params.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`,
-      );
-      res.clearCookie("__Host-wa-mcp-oauth", {
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-      });
-      const redirect = new URL(pending.params.redirectUri);
-      redirect.searchParams.set("code", code);
-      redirect.searchParams.set("iss", issuer.href);
-      if (pending.params.state)
-        redirect.searchParams.set("state", pending.params.state);
-      res.redirect(303, redirect.href);
+      finishConsent(res, pending, { code });
     },
   );
   return { app, provider, store, challenge, resource: RESOURCE };
 }
 
+function numberOption(account, index, count) {
+  const phone = /^(\d{6,15})(?::\d+)?@s\.whatsapp\.net$/.exec(
+    account.selfJid ?? "",
+  )?.[1];
+  const name =
+    account.label ||
+    (/^(Cuenta-|WA-)/.test(account.name)
+      ? index === 0
+        ? "Número principal"
+        : "Número " + (index + 1)
+      : account.name);
+  return `<label class="number">
+    <input type="checkbox" name="number" value="${escape(account.id)}" ${count === 1 ? "checked" : ""}>
+    <span class="number-info"><strong>${escape(name)}</strong><span>${phone ? "+" + phone : "Sin teléfono vinculado"}</span></span>
+  </label>`;
+}
+
 function consentPage(res, id, client, pending, error = "", numbers) {
-  const callbackOrigin = new URL(pending.params.redirectUri).origin;
+  const callback = new URL(pending.params.redirectUri);
+  const canSend = pending.params.scopes.includes("whatsapp:send");
+  const clientName = escape(client.client_name || "tu agente");
   res.set(
     "Content-Security-Policy",
-    `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+    `default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; form-action 'self' ${callback.origin}; frame-ancestors 'none'; base-uri 'none'`,
   );
-  const send = pending.params.scopes.includes("whatsapp:send");
-  res
-    .type("html")
-    .send(
-      `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar agente · Essoria</title><style>body{font:16px system-ui;background:#081b1d;color:#e6f3ef;margin:0;padding:32px}main{max-width:480px;margin:8vh auto;background:#0e282b;padding:32px;border-radius:12px;border:1px solid #325452}h1{font-size:26px}label{display:block;margin:20px 0 8px}input[type=password]{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #7aab9f;border-radius:12px;background:#081b1d;color:#e6f3ef}button{margin-top:24px;width:100%;padding:13px;background:#5dd5c7;color:#062b28;border:0;border-radius:12px;font:inherit}small{color:#b2c9c2}.error{color:#ffbcae}</style><main><h1>Conecta tu agente a Essoria</h1><p>Autorizar <strong>${escape(client.client_name ?? "Cliente MCP")}</strong>.</p><p><small>Callback: ${escape(new URL(pending.params.redirectUri).origin)}</small></p>${numbers ? `<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><input type="hidden" name="company" value="yes"><input type="hidden" name="send" value="yes"><fieldset><legend>Números para esta conexión</legend>${numbers.map((a) => `<label><input type="checkbox" name="number" ${numbers.length === 1 ? "checked" : ""} value="${escape(a.id)}"> ${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</label>`).join("")}</fieldset><p>El agente podrá leer ${send ? "y responder " : ""}en los números seleccionados.</p><button>Autorizar conexión</button></form>` : `<p><a style="color:#94eee1" href="/entrar?oauth=${encodeURIComponent(id)}">Iniciar sesión para elegir mis números</a></p>`}${error ? `<p class="error">${escape(error)}</p>` : ""}</main></html>`,
-    );
+  res.type("html")
+    .send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a1b1d">
+    <title>Conectar ${clientName} · Essoria</title><link rel="icon" href="/assets/brand/essoria/favicon-32.png">
+    <link rel="stylesheet" href="/assets/consent.css"><script defer src="/assets/consent.js"></script></head>
+    <body><main>
+      <img class="brand" src="/assets/brand/essoria/logo-horizontal-dark.png" width="130" alt="Essoria">
+      <section aria-labelledby="title">
+        <header><h1 id="title">Conectar ${clientName}</h1>
+        <p>${numbers ? "Elige los números de WhatsApp que podrá usar." : "Inicia sesión en Essoria para elegir qué números de WhatsApp quieres compartir."}</p></header>
+        <form method="post" action="/oauth/consent">
+          <input type="hidden" name="request" value="${escape(id)}">
+          ${
+            numbers
+              ? `<input type="hidden" name="company" value="yes">
+            ${canSend ? '<input type="hidden" name="send" value="yes">' : ""}
+            <fieldset><legend>Tus números</legend>${numbers.map((a, i) => numberOption(a, i, numbers.length)).join("")}</fieldset>
+            <div class="permission"><img src="/assets/platforms/whatsapp.svg" width="21" height="21" alt=""><div><strong>Permiso del agente</strong><p>${canSend ? "Leer y responder mensajes" : "Leer mensajes"} en los números que selecciones.</p></div></div>`
+              : ""
+          }
+          ${error ? `<p role="alert">${escape(error)}</p>` : ""}
+          <footer><div class="actions">
+            <button class="cancel" type="submit" name="decision" value="cancel" formnovalidate>Cancelar</button>
+            ${numbers ? '<button class="primary" id="authorize" type="submit">Autorizar conexión</button>' : `<a class="primary" href="/entrar?oauth=${encodeURIComponent(id)}">Iniciar sesión</a>`}
+          </div><p class="destination">Volverás a <bdi>${escape(callback.host)}</bdi></p></footer>
+        </form>
+      </section></main></body></html>`);
 }
