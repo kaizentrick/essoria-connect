@@ -575,10 +575,10 @@
         return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button>${a.provider === "openai" ? dotAlerts(a) : ""}</article>`;
       })
       .join("");
-    const webhookAgents = me.agents.filter(
-      (a) => a.provider !== "openai" || a.wake,
-    );
-    if (webhookAgents.length) manualWake(list, webhookAgents);
+    const cards = list.querySelectorAll(".connected-agent");
+    me.agents.forEach((agent, index) => {
+      if (agent.provider !== "openai" || agent.wake) manualWake(cards[index], agent);
+    });
     list.querySelectorAll("[data-revoke]").forEach(
       (b) =>
         (b.onclick = async () => {
@@ -618,59 +618,110 @@
       <blockquote>Crea una tarea en ChatGPT Work con el evento de Essoria para mensajes entrantes de WhatsApp. Pregúntame qué número quiero vigilar y si quiero todos los mensajes, solo chats nuevos o solo ciertos contactos. Cuando llegue uno que coincida, avísame en este chat.</blockquote>
       <button type="button" class="secondary" data-guide-copy>Copiar mensaje</button></details>`;
   }
-  function manualWake(list, webhookAgents) {
+  function manualWake(card, agent) {
+    const saved = agent.wake;
     const panel = document.createElement("details");
-    panel.className = "agent-alerts";
-    panel.innerHTML = `<summary>Avisos por webhook</summary><p>Cuando llega un mensaje que coincide, Essoria avisa a la URL de tu agente. El agente puede abrir el mensaje con su conexión autorizada.</p><form id="wake-config"><label>Conexión <select name="id">${webhookAgents.map((a) => `<option value="${escape(a.id)}">${escape(a.name)} · ${a.wake ? "Avisos activos" : "Sin avisos"}</option>`).join("")}</select></label><label>Avisar por <select name="mode"><option value="off">Desactivado</option><option value="all">Cada mensaje entrante</option><option value="new">Primer mensaje de un chat</option><option value="contacts">Contactos específicos</option></select></label><label>URL HTTPS del agente <input name="url" type="url" autocomplete="off"></label><label>Contactos con código de país, separados por comas <input name="contacts"></label><label>Firma del receptor (si tu agente la pide) <input name="signingKey" type="password" autocomplete="new-password"></label><button>Guardar avisos</button></form>`;
-    list.append(panel);
-    const form = byId("wake-config");
-    function showWake() {
-      const a = me.agents.find((a) => a.id === form.elements.id.value);
-      form.elements.mode.value = a.wake?.mode ?? "off";
-      form.elements.contacts.value = a.wake?.contacts.join(", ") ?? "";
-      form.elements.url.value = "";
-      form.elements.url.placeholder = a.wake
-        ? "Reintroduce la URL de " + a.wake.host
-        : "https://";
-      form.elements.signingKey.value = "";
+    panel.className = "agent-wake";
+    const summary = !saved
+      ? "Activar avisos de WhatsApp"
+      : saved.hasCursorKey === false
+        ? "Completar avisos de Cursor"
+        : "Avisos de WhatsApp configurados";
+    panel.innerHTML = `<summary>${summary}</summary>
+      <form class="wake-config">
+        <label>Avisar por <select name="mode">
+          <option value="off">Desactivado</option><option value="all">Cada mensaje entrante</option>
+          <option value="new">Primer mensaje de un chat</option><option value="contacts">Contactos específicos</option>
+        </select></label>
+        <label>Contactos con código de país, separados por comas <input name="contacts"></label>
+        <label>URL del webhook <input name="url" type="url" autocomplete="off" spellcheck="false" placeholder="https://">
+          <small>Pega el enlace que te dio tu agente o Cursor Automations.</small></label>
+        <label>Clave del webhook de Cursor <input name="cursorKey" type="password" autocomplete="off" spellcheck="false">
+          <small>En el disparador Webhook de Cursor, pulsa <b>Generate auth header</b> y luego <b>Copy auth header</b>. Pega aquí la cabecera completa.</small></label>
+        <label>Firma del receptor (opcional) <input name="signingKey" type="password" autocomplete="off"></label>
+        <label hidden><input type="checkbox" name="clearSignature"> Quitar la firma guardada</label>
+        <p role="alert" hidden></p><button type="submit">Guardar avisos</button>
+      </form>`;
+    card.append(panel);
+    const form = panel.querySelector("form");
+    const { mode, url, contacts, cursorKey, signingKey, clearSignature } = form.elements;
+    mode.value = saved?.mode ?? "off";
+    contacts.value = saved?.contacts.join(", ") ?? "";
+    if (saved) url.placeholder = "Guardado en " + saved.host;
+    function cursorDestination() {
+      if (!url.value.trim()) return saved?.host === "api2.cursor.sh";
+      try {
+        return new URL(url.value).hostname === "api2.cursor.sh";
+      } catch {
+        return false;
+      }
     }
     function showFields() {
-      const off = form.elements.mode.value === "off";
-      for (const field of ["url", "signingKey", "contacts"])
-        form.elements[field].closest("label").hidden =
-          off ||
-          (field === "contacts" && form.elements.mode.value !== "contacts");
+      const active = mode.value !== "off";
+      const cursor = cursorDestination();
+      for (const [field, visible] of [
+        [url, active],
+        [contacts, active && mode.value === "contacts"],
+        [cursorKey, active && cursor],
+        [clearSignature, active && !cursor && saved?.hasSigningKey],
+        [signingKey, active && !cursor && !clearSignature.checked],
+      ]) {
+        field.disabled = !visible;
+        field.closest("label").hidden = !visible;
+      }
+      signingKey.placeholder = saved?.hasSigningKey && !url.value.trim() ? "Firma guardada" : "";
+      url.required = active && !saved;
+      contacts.required = !contacts.disabled;
+      cursorKey.required =
+        active && cursor && (!saved?.hasCursorKey || !!url.value.trim());
+      cursorKey.placeholder =
+        saved?.hasCursorKey && !url.value.trim() ? "Clave guardada" : "";
     }
-    form.elements.mode.onchange = showFields;
-    form.elements.id.onchange = () => {
-      showWake();
-      showFields();
-    };
-    showWake();
+    mode.onchange = showFields;
+    clearSignature.onchange = showFields;
+    url.oninput = showFields;
     showFields();
     form.onsubmit = async (e) => {
       e.preventDefault();
-      const v = Object.fromEntries(new FormData(form));
+      const button = form.querySelector("button"),
+        error = form.querySelector('[role="alert"]');
+      button.disabled = true;
+      error.hidden = true;
       try {
         await request("/api/app/agents/wake", {
-          id: v.id,
+          id: agent.id,
           settings:
-            v.mode === "off"
+            mode.value === "off"
               ? null
               : {
-                  mode: v.mode,
-                  url: v.url,
-                  contacts: v.contacts
-                    .split(",")
-                    .map((n) => n.trim())
-                    .filter(Boolean),
-                  signingKey: v.signingKey,
+                  mode: mode.value,
+                  url: url.value.trim() || undefined,
+                  contacts:
+                    mode.value === "contacts"
+                      ? contacts.value
+                          .split(",")
+                          .map((n) => n.trim())
+                          .filter(Boolean)
+                      : [],
+                  cursorKey: cursorDestination()
+                    ? cursorKey.value || undefined
+                    : undefined,
+                  signingKey: cursorDestination()
+                    ? undefined
+                    : clearSignature.checked ? "" : signingKey.value || undefined,
                 },
         });
         await load();
-        notice("Configuración de avisos guardada.");
+        notice(
+          mode.value === "off"
+            ? "Avisos desactivados."
+            : "Avisos guardados para " + agent.name + ".",
+        );
       } catch (err) {
-        notice(err.message);
+        error.textContent = err.message;
+        error.hidden = false;
+      } finally {
+        button.disabled = false;
       }
     };
   }

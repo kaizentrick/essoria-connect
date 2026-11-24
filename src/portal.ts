@@ -397,9 +397,11 @@ export class Portal {
         .parse(req.body);
       const group = this.agentGroups(u).find((a) => a.id === v.id);
       if (!group) throw new Error("Conexión no disponible");
-      this.wake.configure(group.id, v.settings);
+      const target =
+        group.members.find((member) => this.wake.settings(member)) ?? group.id;
+      this.wake.configure(target, v.settings);
       for (const member of group.members)
-        if (member !== group.id && this.wake.settings(member))
+        if (member !== target && this.wake.settings(member))
           this.wake.configure(member, null);
       res.json({ ok: true });
     });

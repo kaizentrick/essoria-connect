@@ -781,3 +781,131 @@ test("agent consent survives parallel tabs and login in a second browser, with o
   assert.equal(response.status, 400);
   assert((await response.text()).includes("Esta solicitud ya terminó"));
 });
+
+test("Cursor automation wakes use the saved webhook key, preserve filters and isolate credentials", async (t) => {
+  const { randomBytes, randomUUID } = await import("node:crypto");
+  const { Wake, deliverWake } = await import("../dist/wake.js");
+  const f = await portalFixture(t);
+  const user = await f.register("cursor@example.test"),
+    otherUser = await f.register("second@example.test");
+  const me = async () => (await f.get("/api/app/me", user.cookie)).json();
+  const account = (await me()).account.id;
+  const p = f.service.portal.authorizeNumbers(
+    { headers: { cookie: user.cookie } },
+    [account],
+    "Cursor",
+    0,
+    true,
+  );
+  f.service.portal.activateConnection(
+    p,
+    { connection: "cursor-test", permissions: ["read", "send"] },
+    0,
+    false,
+  );
+  const id = (await me()).agents[0].id;
+  const url = "https://api2.cursor.sh/automations/webhook/" + randomUUID();
+  const token = randomBytes(32).toString("base64url");
+  const set = (settings, cookie = user.cookie) =>
+    f.post("/api/app/agents/wake", { id, settings }, cookie);
+  const data = { mode: "all", contacts: [], url };
+  assert.equal((await set(data)).status, 400);
+  assert.equal(
+    (await set({ ...data, cursorKey: "Bearer key\r\nX-Other: test" })).status,
+    400,
+  );
+  assert.equal(
+    (await set({ ...data, cursorKey: token }, otherUser.cookie)).status,
+    400,
+  );
+  assert.equal(
+    (await set({ ...data, cursorKey: "Authorization: Bearer " + token }))
+      .status,
+    200,
+  );
+  const config = (await me()).agents[0].wake;
+  assert.deepEqual(config, {
+    mode: "all",
+    contacts: [],
+    host: "api2.cursor.sh",
+    hasCursorKey: true,
+  });
+  const contact = "+15555551234";
+  assert.equal(
+    (await set({ mode: "contacts", contacts: [contact] })).status,
+    200,
+  );
+  assert.equal((await set({ ...data, url: url + "-other" })).status, 400);
+  assert.equal(
+    (
+      await set({
+        ...data,
+        url: "https://example.test/agent",
+        cursorKey: token,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await set({
+        ...data,
+        url: "https://api2.cursor.sh/another/path",
+        cursorKey: token,
+      })
+    ).status,
+    400,
+  );
+  await f.service.portal.wake.stop();
+  const calls = [];
+  const post = async (to, body, headers) => {
+    calls.push({ to, body, headers });
+    return { status: calls.length === 1 ? 503 : 200, body: "" };
+  };
+  const worker = new Wake(f.service.store, (settings, event) =>
+    deliverWake(settings, event, post),
+  );
+  const ingest = (number, message) =>
+    f.service.sessions.ingest(
+      account,
+      {
+        key: { id: message, remoteJid: number + "@s.whatsapp.net" },
+        message: { conversation: "contenido privado de prueba" },
+      },
+      true,
+    );
+  ingest("15555550011", "filtered");
+  ingest(contact.slice(1), "accepted");
+  ingest(contact.slice(1), "accepted");
+  await worker.drain();
+  f.service.store.db.prepare("UPDATE wake_queue SET due=0").run();
+  await worker.drain();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], calls[1]);
+  const event = JSON.parse(calls[0].body),
+    headers = calls[0].headers;
+  assert.deepEqual(headers, {
+    Authorization: "Bearer " + token,
+    "Idempotency-Key": event.eventId,
+  });
+  assert.equal(calls[0].to, url);
+  assert.equal(event.account, account);
+  assert.equal(event.messageId, "accepted");
+  assert.match(event.context, /MCP/);
+  assert(!calls[0].body.includes("contenido privado"));
+  assert.equal(
+    (await set({ ...data, url: "https://example.test/generic", signingKey: "fixture-signature" })).status,
+    200,
+  );
+  ingest(contact.slice(1), "generic");
+  await worker.drain();
+  assert.equal(calls[2].headers.Authorization, undefined);
+  assert(calls[2].headers["X-Essoria-Signature"]);
+  assert.equal((await me()).agents[0].wake.hasSigningKey, true);
+  assert.equal((await set({ mode: "all", contacts: [], signingKey: "" })).status, 200);
+  assert.equal((await me()).agents[0].wake.hasSigningKey, undefined);
+  assert.equal((await set(null)).status, 200);
+  ingest(contact.slice(1), "off");
+  await worker.drain();
+  assert.equal(calls.length, 3);
+});
