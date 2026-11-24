@@ -379,3 +379,55 @@ test("2026 MCP serves discovery and authorized tools on the public transport", a
     if (method === "tools/list") assert(body.includes("whatsapp_message_send"));
   }
 });
+
+test("passwords require eight characters throughout the account lifecycle", async (t) => {
+  const f = await portalFixture(t);
+  const account = {
+    email: "length@example.test",
+    name: "Length test",
+    acceptedTerms: true,
+  };
+  const password = "abcdefgh";
+  assert.equal(
+    (
+      await f.post("/api/app/register", {
+        ...account,
+        password: password.slice(1),
+      })
+    ).status,
+    400,
+  );
+  const registered = await f.post("/api/app/register", {
+    ...account,
+    password,
+  });
+  assert.equal(registered.status, 201);
+  const { recoveryCode } = await registered.json();
+  assert.equal(
+    (await f.post("/api/app/login", { email: account.email, password })).status,
+    200,
+  );
+  const change = { email: account.email, recoveryCode, password: "87654321" };
+  assert.equal(
+    (
+      await f.post("/api/app/recover", {
+        ...change,
+        password: change.password.slice(1),
+      })
+    ).status,
+    400,
+  );
+  const recovered = await f.post("/api/app/recover", change);
+  assert.equal(recovered.status, 200);
+  const cookie = recovered.headers.get("set-cookie").split(";")[0];
+  assert.equal(
+    (
+      await f.post(
+        "/api/app/delete",
+        { password: change.password, confirm: "ELIMINAR" },
+        cookie,
+      )
+    ).status,
+    200,
+  );
+});

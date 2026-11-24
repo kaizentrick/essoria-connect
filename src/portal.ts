@@ -39,7 +39,7 @@ const credentials = z.object({
     .email()
     .max(200)
     .transform((s) => s.trim().toLowerCase()),
-  password: z.string().min(12).max(200),
+  password: z.string().min(8).max(200),
 });
 let hashing = 0;
 const passwordHash = async (
@@ -416,7 +416,7 @@ export class Portal {
       const u = this.user(req),
         v = z
           .object({
-            password: z.string().min(12).max(200),
+            password: z.string().min(8).max(200),
             confirm: z.literal("ELIMINAR"),
           })
           .strict()
