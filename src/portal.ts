@@ -1,3 +1,4 @@
+import { AgentEvents } from "./events.js";
 import { Wake, wakeSettings } from "./wake.js";
 import {
   randomBytes,
@@ -64,6 +65,7 @@ export class Portal {
   readonly router = express.Router();
   readonly billing: Billing;
   readonly wake: Wake;
+  readonly events: AgentEvents;
   private limits = new Map<string, { count: number; until: number }>();
   constructor(
     readonly store: Store,
@@ -83,7 +85,11 @@ export class Portal {
   CREATE TABLE IF NOT EXISTS send_usage(account TEXT REFERENCES accounts(id) ON DELETE CASCADE,request_id TEXT,month TEXT,created INTEGER,PRIMARY KEY(account,request_id));
   CREATE TABLE IF NOT EXISTS support_requests(id TEXT PRIMARY KEY,email TEXT,message TEXT,created INTEGER);`);
     this.wake = new Wake(store);
-    sessions.onIncoming = (a, m, n) => this.wake.enqueue(a, m, n);
+    this.events = new AgentEvents(store);
+    sessions.onIncoming = (a, m, n) => {
+      this.wake.enqueue(a, m, n);
+      this.events.enqueue(a, m, n);
+    };
     // Retire manual customer keys, including grants derived from them. Preserve OAuth connections.
     if (!store.get("meta", "", "customer-oauth-only-v1"))
       store.transaction(() => {
@@ -334,7 +340,10 @@ export class Portal {
           readReceipts:
             store.get("preferences", a.id, "read-receipts") === true,
         })),
-        agents: this.agentGroups(u).map(({ members, ...agent }) => agent),
+        agents: this.agentGroups(u).map(({ members, ...agent }) => ({
+          ...agent,
+          events: this.events.status(members),
+        })),
         billing: {
           ...this.billing.publicState(),
           state: u.billing_state,

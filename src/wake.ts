@@ -15,7 +15,7 @@ export const wakeSettings = z
   })
   .strict();
 type Settings = z.infer<typeof wakeSettings>;
-function receiver(value: string) {
+export function receiver(value: string) {
   const u = new URL(value);
   if (
     u.protocol !== "https:" ||
@@ -29,10 +29,15 @@ function receiver(value: string) {
     throw new Error("Usa una URL HTTPS pública con nombre de dominio.");
   return u;
 }
-export function signatureHeaders(body: string, id: string, key?: string) {
+export function signatureHeaders(
+  body: string,
+  id: string,
+  key?: string,
+  signedAt = Date.now(),
+): Record<string, string> {
   if (!key) return {};
   if (key.startsWith("whsec_")) {
-    const timestamp = String(Math.floor(Date.now() / 1000));
+    const timestamp = String(Math.floor(signedAt / 1000));
     const signature = createHmac("sha256", Buffer.from(key.slice(6), "base64"))
       .update(id + "." + timestamp + "." + body)
       .digest("base64");
@@ -47,14 +52,16 @@ export function signatureHeaders(body: string, id: string, key?: string) {
       "sha256=" + createHmac("sha256", key).update(body).digest("hex"),
   };
 }
-async function deliver(
-  s: Settings,
-  event: { eventId: unknown; [key: string]: unknown },
-) {
-  const body = JSON.stringify(event);
-  await new Promise<void>((resolve, reject) => {
+export type HookResponse = { status: number; body: string };
+export async function postWebhook(
+  url: string,
+  body: string,
+  headers: Record<string, string>,
+  readBody = false,
+): Promise<HookResponse> {
+  return new Promise((resolve, reject) => {
     const req = https.request(
-      receiver(s.url),
+      receiver(url),
       {
         method: "POST",
         agent: false,
@@ -76,18 +83,47 @@ async function deliver(
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
-          ...signatureHeaders(body, String(event.eventId), s.signingKey),
+          ...headers,
         },
       },
       (res) => {
-        const ok = res.statusCode! >= 200 && res.statusCode! < 300;
-        res.destroy();
-        ok ? resolve() : reject(new Error("Receptor no confirmó"));
+        const status = res.statusCode ?? 0;
+        if (!readBody || status < 200 || status >= 300) {
+          res.destroy();
+          resolve({ status, body: "" });
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on("error", reject);
+        res.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > 4096) {
+            res.destroy();
+            reject(new Error("Respuesta demasiado grande"));
+          } else chunks.push(chunk);
+        });
+        res.on("end", () =>
+          resolve({ status, body: Buffer.concat(chunks).toString("utf8") }),
+        );
       },
     );
     req.on("error", reject);
     req.end(body);
   });
+}
+async function deliver(
+  s: Settings,
+  event: { eventId: unknown; [key: string]: unknown },
+) {
+  const body = JSON.stringify(event);
+  const response = await postWebhook(
+    s.url,
+    body,
+    signatureHeaders(body, String(event.eventId), s.signingKey),
+  );
+  if (response.status < 200 || response.status >= 300)
+    throw new Error("Receptor no confirmó");
 }
 
 export class Wake {
