@@ -300,6 +300,7 @@ test("2026 MCP serves discovery and authorized tools on the public transport", a
   const version = "2026-07-28";
   for (const [method, params] of [
     ["server/discover", {}],
+    ["events/list", {}],
     ["tools/list", {}],
     ["tools/call", { name: "whatsapp_account_list", arguments: {} }],
   ]) {
@@ -329,6 +330,9 @@ test("2026 MCP serves discovery and authorized tools on the public transport", a
     const body = await response.text();
     assert.equal(response.status, 200, body);
     assert(!body.includes('"error":'), body);
+    if (method === "server/discover") assert.match(body, /"events":\{\}/);
+    if (method === "events/list")
+      assert.match(body, /whatsapp.message.received/);
     if (method === "tools/list") assert(body.includes("whatsapp_message_send"));
   }
 });
@@ -470,4 +474,127 @@ test("completed reconnection replaces earlier grants within the company, includi
   );
   assert.equal(f.service.access.resolve(narrow), null);
   assert(f.service.access.resolve(y));
+});
+
+test("MCP events verify callbacks, preserve filters and ownership, sign delivery and stop on revoke", async (t) => {
+  const f = await portalFixture(t),
+    a = await f.register("events@example.test"),
+    b = await f.register("other-events@example.test");
+  const account = async (u) =>
+    (await (await f.get("/api/app/me", u.cookie)).json()).account.id;
+  const n = await account(a),
+    other = await account(b);
+  const p = f.service.portal.authorizeNumbers(
+    { headers: { cookie: a.cookie } },
+    [n],
+    "Dot",
+  );
+  const foreign = f.service.portal.authorizeNumbers(
+    { headers: { cookie: b.cookie } },
+    [other],
+    "Dot",
+  );
+  const events = f.service.portal.events,
+    calls = [];
+  await events.stop();
+  const { createHmac, randomBytes } = await import("node:crypto");
+  const secret = "whsec_" + randomBytes(32).toString("base64");
+  const params = {
+    name: "whatsapp.message.received",
+    arguments: { account: n, contact: "+15555550001" },
+    delivery: {
+      url: "https://agent.example.test/callback",
+      mode: "webhook",
+      secret,
+    },
+    ttlMs: 100000,
+  };
+  events.post = async (url, body, headers) => {
+    const data = JSON.parse(body);
+    calls.push(data);
+    const signed = createHmac("sha256", Buffer.from(secret.slice(6), "base64"))
+      .update(
+        headers["webhook-id"] + "." + headers["webhook-timestamp"] + "." + body,
+      )
+      .digest("base64");
+    assert.equal(headers["webhook-signature"], "v1," + signed);
+    assert(headers["X-MCP-Subscription-Id"]);
+    return { status: 200, body: JSON.stringify({ challenge: data.challenge }) };
+  };
+  await assert.rejects(() =>
+    events.handle("events/subscribe", params, foreign),
+  );
+  const accepted = await events.handle("events/subscribe", params, p),
+    refresh = await events.handle("events/subscribe", params, p);
+  assert.equal(accepted.id, refresh.id);
+  assert.equal(calls.length, 1);
+  const incoming = (id) => ({
+    key: {
+      id,
+      remoteJid:
+        id === "no"
+          ? "15555550002@s.whatsapp.net"
+          : "15555550001@s.whatsapp.net",
+    },
+    messageTimestamp: 1700000000,
+    message: { conversation: "fixture" },
+  });
+  f.service.sessions.ingest(n, incoming("no"), true);
+  f.service.sessions.ingest(n, incoming("yes"), true);
+  f.service.sessions.ingest(n, incoming("yes"), true);
+  f.service.sessions.ingest(other, incoming("other"), true);
+  await events.drain();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].data.messageId, "yes");
+  assert(!JSON.stringify(calls[1]).includes("fixture"));
+  assert.equal(events.status([p.tokenHash]).count, 1);
+  await events.handle("events/unsubscribe", params, p);
+  await events.handle("events/unsubscribe", params, p);
+  assert.equal(events.status([p.tokenHash]).count, 0);
+  const post = events.post;
+  events.post = async () => ({ status: 200, body: '{"challenge":"wrong"}' });
+  await assert.rejects(
+    () => events.handle("events/subscribe", params, p),
+    (e) => e.code === -32015,
+  );
+  events.post = post;
+  await events.handle("events/subscribe", params, p);
+  f.service.sessions.ingest(n, incoming("late"), true);
+  f.service.access.revoke(p.tokenHash);
+  await events.drain();
+  assert.equal(calls.length, 3);
+});
+
+test("legacy MCP initialization advertises events and exposes the authenticated event catalog", async (t) => {
+  const f = await portalFixture(t),
+    u = await f.register("event-legacy@example.test");
+  const me = await (await f.get("/api/app/me", u.cookie)).json(),
+    key = f.service.access.issue(me.account.id, ["read"]);
+  const invoke = async (method, params) => {
+    const res = await fetch(f.base + "/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + key.token,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-03-26",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    return res.json();
+  };
+  const hello = await invoke("initialize", {
+    protocolVersion: "2025-03-26",
+    clientInfo: { name: "test", version: "1" },
+    capabilities: {},
+  });
+  assert.deepEqual(hello.result.capabilities.events, {});
+  assert.equal(
+    (await invoke("events/list", {})).result.events[0].name,
+    "whatsapp.message.received",
+  );
+  assert.equal(
+    (await invoke("events/subscribe", { name: "invalid" })).error.code,
+    -32602,
+  );
 });
