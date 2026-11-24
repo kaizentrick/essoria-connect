@@ -100,6 +100,7 @@ export function createOAuth({
   companyNumbers,
   authorizeNumbers,
   revokeCompany,
+  activateConnection,
   resolvePrincipal,
   storePath,
 }) {
@@ -108,6 +109,50 @@ export function createOAuth({
   const issuer = new URL(ORIGIN);
   const challenge = `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp", scope="${SCOPES.join(" ")}"`;
   const store = new Store(storePath, config.masterKey);
+  function connectionInfo(client, uri, resource, scopes) {
+    const url = uri && new URL(uri);
+    const provider =
+      url?.protocol === "https:" &&
+      {
+        "chatgpt.com": "openai",
+        "chat.openai.com": "openai",
+        "claude.ai": "claude",
+        "grok.com": "grok",
+        "muse.ai": "muse",
+      }[url.hostname];
+    const identity =
+      provider === "openai"
+        ? [provider, url.port, url.pathname, url.search]
+        : [client.client_id, uri];
+    return {
+      permissions: scopes.map((s) => s.split(":")[1]),
+      provider: provider || undefined,
+      connection: digest(JSON.stringify([identity, resource])),
+    };
+  }
+  if (activateConnection) {
+    for (const { id } of store.db
+      .prepare(
+        "SELECT id FROM records WHERE kind='grant' AND (expires=0 OR expires>?)",
+      )
+      .all(now())) {
+      const grant = store.get("grant", id);
+      if (grant?.revoked || !grant?.principal.accountIds) continue;
+      const client = store.get("client", grant.clientId);
+      if (!client) continue;
+      const uri =
+        grant.redirectUri ??
+        (client.redirect_uris.length === 1
+          ? client.redirect_uris[0]
+          : undefined);
+      activateConnection(
+        grant.principal,
+        connectionInfo(client, uri, grant.resource, grant.scopes),
+        grant.expires,
+        true,
+      );
+    }
+  }
   const resourceOk = (resource) =>
     !resource || [RESOURCE, ORIGIN + "/mcp/code"].includes(resource.href);
   const getGrant = (kind, token, client) => {
@@ -122,11 +167,14 @@ export function createOAuth({
   const issue = (grantId, grant) => {
     const access = random(),
       refresh = random();
+    const lifetime = grant.expires
+      ? Math.min(3600, grant.expires - now())
+      : 3600;
     store.set(
       "access",
       digest(access),
       { grantId, clientId: grant.clientId },
-      now() + 3600,
+      now() + lifetime,
     );
     store.set(
       "refresh",
@@ -137,7 +185,7 @@ export function createOAuth({
     return {
       access_token: access,
       token_type: "Bearer",
-      expires_in: 3600,
+      expires_in: lifetime,
       refresh_token: refresh,
       scope: grant.scopes.join(" "),
     };
@@ -227,7 +275,7 @@ export function createOAuth({
       const pendingCode = store.get("code", digest(code));
       if (!pendingCode || !(await resolvePrincipal(pendingCode.principal)))
         throw new InvalidGrantError("Credential revoked or expired");
-      return store.transaction(() => {
+      const { grant, tokens } = store.transaction(() => {
         const r = store.get("code", digest(code));
         if (
           !r ||
@@ -243,12 +291,20 @@ export function createOAuth({
             principal: r.principal,
             scopes: r.scopes,
             resource: r.resource ?? RESOURCE,
-            expires: now() + 30 * 86400,
+            expires: r.expires ?? now() + 30 * 86400,
+            redirectUri: r.redirectUri,
             revoked: false,
           };
         store.set("grant", grantId, grant, grant.expires);
-        return issue(grantId, grant);
+        return { grant, tokens: issue(grantId, grant) };
       });
+      activateConnection?.(
+        grant.principal,
+        connectionInfo(client, grant.redirectUri, grant.resource, grant.scopes),
+        grant.expires,
+        false,
+      );
+      return tokens;
     },
     async exchangeRefreshToken(client, token, scopes, resource) {
       if (!resourceOk(resource)) throw new InvalidTargetError("Wrong resource");
@@ -433,6 +489,10 @@ export function createOAuth({
       const count = attempts.get(ip);
       if (count && count.until > Date.now() && count.count >= 10)
         return res.status(429).send("Too many attempts. Wait 15 minutes.");
+      const duration = req.body.duration ?? "30";
+      if (!["30", "60", "90", "indefinite"].includes(duration))
+        return res.status(400).send("Selecciona una duración válida.");
+      const days = duration === "indefinite" ? 0 : Number(duration);
       let principal;
       try {
         if (req.body.company === "yes") {
@@ -445,6 +505,7 @@ export function createOAuth({
             req,
             ids,
             String(client.client_name ?? "Agente MCP").slice(0, 60),
+            days,
           );
         }
       } catch {}
@@ -489,6 +550,7 @@ export function createOAuth({
             clientId: client.client_id,
             principal,
             scopes,
+            expires: days ? now() + days * 86400 : 0,
             challenge: pending.params.codeChallenge,
             redirectUri: pending.params.redirectUri,
             resource: pending.params.resource,
@@ -545,6 +607,7 @@ function consentPage(res, id, client, pending, error = "", numbers) {
               ? `<input type="hidden" name="company" value="yes">
             ${canSend ? '<input type="hidden" name="send" value="yes">' : ""}
             <fieldset><legend>Tus números</legend>${numbers.map((a, i) => numberOption(a, i, numbers.length)).join("")}</fieldset>
+            <label class="grant-duration">Duración del permiso<select name="duration"><option value="30">30 días</option><option value="60">60 días</option><option value="90">90 días</option><option value="indefinite">Indefinido · hasta que lo revoque</option></select></label>
             <div class="permission"><img src="/assets/platforms/whatsapp.svg" width="21" height="21" alt=""><div><strong>Permiso del agente</strong><p>${canSend ? "Leer y responder mensajes" : "Leer mensajes"} en los números que selecciones.</p></div></div>`
               : ""
           }

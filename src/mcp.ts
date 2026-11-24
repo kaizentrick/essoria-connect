@@ -40,6 +40,7 @@ type Spec = {
   description: string;
   permission: Permission;
   ownerOnly?: boolean;
+  readOnly: boolean;
   schema: z.ZodType;
   run: (args: any, p: Principal) => Promise<any> | any;
 };
@@ -77,6 +78,9 @@ export class Tools {
       ownerOnly = false,
     ): Spec => ({
       name: "whatsapp_" + name,
+      readOnly:
+        permission === "read" &&
+        !["message_list", "message_get", "media_get"].includes(name),
       description,
       permission,
       schema,
@@ -229,7 +233,7 @@ export class Tools {
       ),
       spec(
         "message_list",
-        "Read stored messages with original IDs, sender identity and delivery state. Does not mark messages as read.",
+        "Read stored messages with original IDs, sender identity and delivery state. Sends WhatsApp read receipts for returned incoming messages when enabled on this account.",
         "read",
         z
           .object({
@@ -240,12 +244,17 @@ export class Tools {
             ...page,
           })
           .strict(),
-        (a, p) => ({
-          account: scope(a, p).id,
-          messages: this.store.messages(scope(a, p).id, a).map(messageView),
-          limit: a.limit,
-          offset: a.offset,
-        }),
+        async (a, p) => {
+          const id = scope(a, p).id,
+            messages = this.store.messages(id, a);
+          await this.sessions.markViewed(id, messages);
+          return {
+            account: id,
+            messages: messages.map(messageView),
+            limit: a.limit,
+            offset: a.offset,
+          };
+        },
       ),
       spec(
         "message_get",
@@ -259,7 +268,7 @@ export class Tools {
             fromMe: z.boolean().optional(),
           })
           .strict(),
-        (a, p) => {
+        async (a, p) => {
           const ac = scope(a, p),
             m = this.store.messages(ac.id, {
               id: a.messageId,
@@ -270,6 +279,7 @@ export class Tools {
             });
           if (m.length !== 1)
             throw new Error("Message missing or ambiguous; provide its chat");
+          await this.sessions.markViewed(ac.id, m);
           return { account: ac.id, message: messageView(m[0]!) };
         },
       ),
@@ -371,7 +381,7 @@ export class Tools {
       ),
       spec(
         "media_get",
-        "Download a stored message attachment within the configured size limit. Returns standard MCP binary resource content.",
+        "Download a stored message attachment within the configured size limit. Returns playable audio, viewable images or a file resource with its MIME type.",
         "read",
         z
           .object({
@@ -382,12 +392,15 @@ export class Tools {
           .strict(),
         async (a, p) => {
           const ac = scope(a, p),
-            bytes = await this.sessions.media(ac.id, a.messageId, a.chat);
+            media = await this.sessions.media(ac.id, a.messageId, a.chat);
           return {
-            __blob: bytes.toString("base64"),
+            __blob: media.bytes.toString("base64"),
+            kind: media.kind,
+            mimeType: media.mimeType,
+            fileName: media.fileName,
             account: ac.id,
             messageId: a.messageId,
-            bytes: bytes.length,
+            bytes: media.bytes.length,
           };
         },
       ),
@@ -469,16 +482,18 @@ export class Tools {
         image = data?.__image,
         blob = data?.__blob;
       if (image) delete data.__image;
-      if (blob) delete data.__blob;
+      if (blob !== undefined) delete data.__blob;
       const content: any[] = [{ type: "text", text: JSON.stringify(data) }];
       if (image)
         content.push({ type: "image", data: image, mimeType: "image/png" });
-      if (blob)
+      if (blob !== undefined && ["image", "audio"].includes(data.kind))
+        content.push({ type: data.kind, data: blob, mimeType: data.mimeType });
+      else if (blob !== undefined)
         content.push({
           type: "resource",
           resource: {
-            uri: `wa-media://${data.account}/${data.messageId}`,
-            mimeType: "application/octet-stream",
+            uri: `wa-media://${data.account}/${encodeURIComponent(data.messageId)}`,
+            mimeType: data.mimeType,
             blob,
           },
         });
@@ -519,7 +534,7 @@ export class Tools {
           description: s.description,
           inputSchema: schema as Tool["inputSchema"],
           annotations: {
-            readOnlyHint: s.permission === "read",
+            readOnlyHint: s.readOnly,
             destructiveHint: s.permission !== "read",
             openWorldHint: s.name !== "whatsapp_profile_get",
           },

@@ -15,11 +15,15 @@ export function fakeDriver() {
       closed: false,
       loggedOut: false,
       sends: [],
+      reads: [],
       self: "15550000001:2@s.whatsapp.net",
       sendError: null,
       delay: 0,
     };
     const socket = {
+      readMessages: async (keys) => {
+        state.reads.push(...keys);
+      },
       user: () => ({ id: state.self, name: "Test account" }),
       close: async () => {
         state.closed = true;

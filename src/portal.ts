@@ -244,10 +244,60 @@ export class Portal {
       const candidate = (
         await passwordHash(v.password, u?.salt ?? "unknown-account-placeholder")
       ).toString("hex");
-      if (!u || !safeEqual(candidate, u.password))
+      if (
+        !u ||
+        !safeEqual(candidate, u.password) ||
+        !store.db
+          .prepare("SELECT 1 FROM customers WHERE id=? AND password=?")
+          .get(u.id, u.password)
+      )
         throw new Error("Correo o contraseña incorrectos.");
       this.newSession(u.id, res);
       res.json({ ok: true });
+    });
+    route("post", "/api/app/password", async (req, res) => {
+      const u = this.user(req);
+      this.count("password:" + u.id, 12, 900000);
+      const v = z
+        .object({
+          current: credentials.shape.password,
+          password: credentials.shape.password,
+        })
+        .strict()
+        .parse(req.body);
+      if (
+        !safeEqual(
+          (await passwordHash(v.current, u.salt)).toString("hex"),
+          u.password,
+        )
+      )
+        throw new Error("La contraseña actual es incorrecta.");
+      const salt = token(),
+        next = (await passwordHash(v.password, salt)).toString("hex");
+      store.transaction(() => {
+        if (
+          !store.db
+            .prepare(
+              "UPDATE customers SET password=?,salt=? WHERE id=? AND password=?",
+            )
+            .run(next, salt, u.id, u.password).changes
+        )
+          throw new Error("La cuenta cambió. Vuelve a iniciar sesión.");
+        store.db.prepare("DELETE FROM web_sessions WHERE user_id=?").run(u.id);
+        this.newSession(u.id, res);
+      });
+      res.json({ ok: true });
+    });
+    route("post", "/api/app/numbers/read-receipts", (req, res) => {
+      const u = this.user(req);
+      const { account, enabled } = z
+        .object({ account: z.string(), enabled: z.boolean() })
+        .strict()
+        .parse(req.body);
+      if (!this.numbers(u).some((a) => a.id === account))
+        throw new Error("Número no disponible.");
+      store.put("preferences", account, "read-receipts", enabled);
+      res.json({ enabled });
     });
     route("post", "/api/app/logout", (req, res) => {
       const s = this.cookie(req);
@@ -279,10 +329,12 @@ export class Portal {
           trialUntil: u.trial_until,
         },
         account: store.account(u.account),
-        numbers: this.numbers(u),
-        agents: this.numbers(u)
-          .flatMap((a) => access.tokens(a.id))
-          .map((t) => ({ ...t, wake: this.wake.settings(t.id) })),
+        numbers: this.numbers(u).map((a) => ({
+          ...a,
+          readReceipts:
+            store.get("preferences", a.id, "read-receipts") === true,
+        })),
+        agents: this.agentGroups(u).map(({ members, ...agent }) => agent),
         billing: {
           ...this.billing.publicState(),
           state: u.billing_state,
@@ -334,13 +386,12 @@ export class Portal {
         .object({ id: z.string(), settings: wakeSettings.nullable() })
         .strict()
         .parse(req.body);
-      if (
-        !this.numbers(u).some((a) =>
-          access.tokens(a.id).some((t) => t.id === v.id),
-        )
-      )
-        throw new Error("Conexión no disponible");
-      this.wake.configure(v.id, v.settings);
+      const group = this.agentGroups(u).find((a) => a.id === v.id);
+      if (!group) throw new Error("Conexión no disponible");
+      this.wake.configure(group.id, v.settings);
+      for (const member of group.members)
+        if (member !== group.id && this.wake.settings(member))
+          this.wake.configure(member, null);
       res.json({ ok: true });
     });
     route("post", "/api/app/agents/revoke", (req, res) => {
@@ -349,13 +400,11 @@ export class Portal {
           .object({ id: z.string().regex(/^[a-f0-9]{64}$/) })
           .strict()
           .parse(req.body);
-      if (
-        !this.numbers(u).some((a) =>
-          access.tokens(a.id).some((t) => t.id === v.id),
-        )
-      )
-        throw new Error("Clave no encontrada.");
-      access.revoke(v.id);
+      const group = this.agentGroups(u).find((a) => a.id === v.id);
+      if (!group) throw new Error("Conexión no disponible.");
+      store.transaction(() => {
+        for (const member of group.members) access.revoke(member);
+      });
       res.json({ ok: true });
     });
     route("post", "/api/app/checkout", async (req, res) => {
@@ -467,12 +516,107 @@ export class Portal {
         .map((r) => this.store.account(String(r.account))),
     ];
   }
-  authorizeNumbers(req: Request, ids: string[], name: string) {
+  private agentGroups(u: any) {
+    const tokens = this.numbers(u)
+      .flatMap((a) => this.access.tokens(a.id))
+      .sort(
+        (a, b) =>
+          (b.expiresAt || Infinity) - (a.expiresAt || Infinity) ||
+          b.createdAt - a.createdAt,
+      );
+    const groups = new Map<string, typeof tokens>();
+    for (const token of tokens) {
+      if (token.unconfirmed) continue;
+      const key = JSON.stringify([
+        token.connection ?? token.id,
+        [...token.numberIds].sort(),
+        [...token.permissions].sort(),
+      ]);
+      const group = groups.get(key) ?? [];
+      group.push(token);
+      groups.set(key, group);
+    }
+    return Array.from(groups.values(), (group) => {
+      const first = group[0]!;
+      const configured = group.find((t) => this.wake.settings(t.id));
+      return {
+        ...first,
+        name:
+          (
+            {
+              openai: "Dot / ChatGPT",
+              claude: "Claude / Duet",
+              grok: "Grok",
+              muse: "Muse",
+            } as Record<string, string>
+          )[first.provider ?? ""] ?? first.name,
+        lastUsedAt: Math.max(...group.map((t) => t.lastUsedAt ?? 0)) || null,
+        wake: configured ? this.wake.settings(configured.id) : null,
+        members: group.map((t) => t.id),
+      };
+    });
+  }
+  activateConnection(
+    p: Principal,
+    info: { connection: string; provider?: string; permissions: Permission[] },
+    expires: number,
+    legacy: boolean,
+  ) {
+    if (!p.tokenHash || !p.accountIds) return;
+    const id = p.tokenHash,
+      key = this.store.get("access-key", "", id);
+    if (!key || (legacy && key.connection)) return;
+    this.store.transaction(() => {
+      this.store.put(
+        "access-key",
+        "",
+        id,
+        { ...key, ...info, pendingOAuth: false },
+        expires * 1000,
+      );
+      if (legacy) return;
+      const customer = this.customerForAccount(p.accountId!);
+      if (!customer) return;
+      for (const group of this.agentGroups(customer)) {
+        if (group.connection !== info.connection) continue;
+        for (const other of group.members) {
+          if (other === id) continue;
+          const wake = this.store.get("wake", "", other);
+          const sameOrNarrower = p.accountIds!.every((n) =>
+            group.numberIds.includes(n),
+          );
+          if (wake && sameOrNarrower && !this.store.get("wake", "", id)) {
+            this.store.put("wake", "", id, wake);
+            this.store.db
+              .prepare(
+                "UPDATE OR IGNORE wake_queue SET connection=? WHERE connection=?",
+              )
+              .run(id, other);
+          }
+          this.access.revoke(other);
+        }
+      }
+    });
+  }
+  authorizeNumbers(
+    req: Request,
+    ids: string[],
+    name: string,
+    days = 30,
+    pending = false,
+  ) {
     const u = this.user(req),
       owned = this.numbers(u);
     if (!ids.length || ids.some((id) => !owned.some((a) => a.id === id)))
       throw new Error("Selecciona números de tu empresa");
-    const issued = this.access.issue(ids[0]!, ["read", "send"], 30, name, ids);
+    const issued = this.access.issue(
+      ids[0]!,
+      ["read", "send"],
+      days,
+      name,
+      ids,
+      pending,
+    );
     return this.access.identify(issued.token);
   }
   principal(u: any): Principal {
@@ -508,13 +652,16 @@ export class Portal {
         { status: 429 },
       );
   }
-  guard(name: string, p: Principal): void {
-    if (p.role === "owner" || !p.accountId) return;
-    const u = this.store.db
+  private customerForAccount(account: string): any {
+    return this.store.db
       .prepare(
         "SELECT * FROM customers WHERE account=? OR id IN (SELECT customer FROM company_numbers WHERE account=?)",
       )
-      .get(p.accountId, p.accountId) as any;
+      .get(account, account);
+  }
+  guard(name: string, p: Principal): void {
+    if (p.role === "owner" || !p.accountId) return;
+    const u = this.customerForAccount(p.accountId);
     if (!u) return;
     if (/message_send|media_send|pairing_start/.test(name)) {
       if (!this.entitled(u))
@@ -556,11 +703,7 @@ export class Portal {
     return this.numbers(u).reduce((sum, a) => sum + this.usage(a.id), 0);
   }
   checkSend(account: string, requestId: string): void {
-    const u = this.store.db
-      .prepare(
-        "SELECT * FROM customers WHERE account=? OR id IN (SELECT customer FROM company_numbers WHERE account=?)",
-      )
-      .get(account, account) as any;
+    const u = this.customerForAccount(account);
     if (!u) return;
     this.store.transaction(() => {
       if (!this.entitled(u))

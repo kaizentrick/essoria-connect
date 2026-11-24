@@ -367,3 +367,107 @@ test("passwords require eight characters throughout the account lifecycle", asyn
     200,
   );
 });
+
+test("password changes rotate browser sessions; receipt preferences stay per tenant and per number", async (t) => {
+  const f = await portalFixture(t),
+    email = "settings@example.test",
+    current = "long-fictional-password-123";
+  const a = await f.register(email),
+    b = await f.register("other@example.test");
+  const me = async (cookie) => (await f.get("/api/app/me", cookie)).json();
+  const first = (await me(a.cookie)).account.id,
+    second = (
+      await (await f.post("/api/app/numbers", { label: "B" }, a.cookie)).json()
+    ).id;
+  const pref = (id, cookie, enabled) =>
+    f.post("/api/app/numbers/read-receipts", { account: id, enabled }, cookie);
+  assert.equal((await pref(first, b.cookie, true)).status, 400);
+  assert.equal((await pref(second, a.cookie, true)).status, 200);
+  assert.deepEqual(
+    (await me(a.cookie)).numbers.map((n) => n.readReceipts),
+    [false, true],
+  );
+  const change = (old, password) =>
+    f.post("/api/app/password", { current: old, password }, a.cookie);
+  assert.equal((await change("incorrecta", "ocho1234")).status, 400);
+  assert.equal((await change(current, "short")).status, 400);
+  const oldSession = (
+    await f.post("/api/app/login", { email, password: current })
+  ).headers
+    .get("set-cookie")
+    .split(";")[0];
+  const changed = await change(current, "ocho1234");
+  assert.equal(changed.status, 200);
+  for (const cookie of [a.cookie, oldSession])
+    assert.equal((await f.get("/api/app/me", cookie)).status, 401);
+  assert.equal(
+    (
+      await f.get(
+        "/api/app/me",
+        changed.headers.get("set-cookie").split(";")[0],
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await f.post("/api/app/login", { email, password: current })).status,
+    400,
+  );
+  assert.equal(
+    (await f.post("/api/app/login", { email, password: "ocho1234" })).status,
+    200,
+  );
+});
+
+test("completed reconnection replaces earlier grants within the company, including a narrower set of numbers", async (t) => {
+  const f = await portalFixture(t),
+    a = await f.register("agent@example.test"),
+    b = await f.register("different@example.test");
+  const me = async (c) => (await f.get("/api/app/me", c)).json();
+  const first = (await me(a.cookie)).account.id,
+    other = (await me(b.cookie)).account.id,
+    second = (
+      await (await f.post("/api/app/numbers", { label: "B" }, a.cookie)).json()
+    ).id;
+  const start = (cookie, ids) =>
+    f.service.portal.authorizeNumbers(
+      { headers: { cookie } },
+      ids,
+      "ChatGPT",
+      0,
+      true,
+    );
+  const activate = (p, days) =>
+    f.service.portal.activateConnection(
+      p,
+      {
+        connection: "real-client",
+        provider: "openai",
+        permissions: ["read", "send"],
+      },
+      days ? Math.floor(Date.now() / 1000) + days * 86400 : 0,
+      false,
+    );
+  const x = start(a.cookie, [first, second]),
+    y = start(b.cookie, [other]);
+  assert.equal((await me(a.cookie)).agents.length, 0);
+  activate(x, 30);
+  activate(y, 90);
+  const narrow = start(a.cookie, [second]);
+  assert(f.service.access.resolve(x));
+  activate(narrow, 0);
+  assert.equal(f.service.access.resolve(x), null);
+  assert(f.service.access.resolve(y));
+  const agents = (await me(a.cookie)).agents;
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].name, "Dot / ChatGPT");
+  assert.equal(agents[0].expiresAt, 0);
+  assert.deepEqual(agents[0].numberIds, [second]);
+  assert.equal(
+    (await f.post("/api/app/agents/revoke", { id: agents[0].id }, a.cookie))
+      .status,
+    200,
+  );
+  assert.equal(f.service.access.resolve(narrow), null);
+  assert(f.service.access.resolve(y));
+});

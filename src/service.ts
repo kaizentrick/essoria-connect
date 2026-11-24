@@ -70,8 +70,13 @@ export class Service {
       revokeCompany: (id: string) => this.access.revoke(id),
       companyNumbers: (req: Request) =>
         this.portal.numbers(this.portal.user(req)),
-      authorizeNumbers: (req: Request, ids: string[], name: string) =>
-        this.portal.authorizeNumbers(req, ids, name),
+      authorizeNumbers: (
+        req: Request,
+        ids: string[],
+        name: string,
+        days: number,
+      ) => this.portal.authorizeNumbers(req, ids, name, days, true),
+      activateConnection: this.portal.activateConnection.bind(this.portal),
       storePath: join(config.dataDir, "oauth.sqlite"),
       resolvePrincipal: async (p: Principal) => this.access.resolve(p),
     });
@@ -226,7 +231,7 @@ export class Service {
                     description: spec.description,
                     inputSchema: spec.schema,
                     annotations: {
-                      readOnlyHint: spec.permission === "read",
+                      readOnlyHint: spec.readOnly,
                       destructiveHint: spec.permission !== "read",
                     },
                   },

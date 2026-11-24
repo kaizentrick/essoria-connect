@@ -143,9 +143,11 @@ export class Billing {
         line_items: [{ price: this.options.stripePrice, quantity: 1 }],
         client_reference_id: user.id,
         success_url:
-          this.portal.config.publicUrl + "/app/facturacion?checkout=returned",
+          this.portal.config.publicUrl +
+          "/app/cuenta?checkout=returned#facturacion",
         cancel_url:
-          this.portal.config.publicUrl + "/app/facturacion?checkout=cancelled",
+          this.portal.config.publicUrl +
+          "/app/cuenta?checkout=cancelled#facturacion",
         metadata: { essoria_user: user.id, brand: "essoria" },
         subscription_data: {
           metadata: { essoria_user: user.id, brand: "essoria" },
@@ -164,7 +166,7 @@ export class Billing {
     return (
       await stripe.billingPortal.sessions.create({
         customer: user.stripe_customer,
-        return_url: this.portal.config.publicUrl + "/app/facturacion",
+        return_url: this.portal.config.publicUrl + "/app/cuenta#facturacion",
       })
     ).url;
   }

@@ -179,3 +179,5 @@ button,
     padding-inline: 12px;
   }
 }
+.grant-duration {display:grid; gap:.45rem; margin:1.15rem 0; font-weight:600}
+.grant-duration select {font:inherit;color:inherit;background:#142f30;border:1px solid #506d6c;border-radius:10px;padding:.65rem .8rem;width:100%;color-scheme:dark}

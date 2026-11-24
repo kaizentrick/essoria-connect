@@ -194,7 +194,53 @@ test("self sends, group identifiers, bounded media and status enums use the same
   assert.equal(socket.sends.length, 2);
   f.sessions.ingest(account.id, message("attachment"));
   assert.equal(
-    (await f.sessions.media(account.id, "attachment")).toString(),
+    (await f.sessions.media(account.id, "attachment")).bytes.toString(),
     "test-media",
   );
+});
+
+test("agent reads mark only the returned incoming messages on opted-in numbers and expose native attachment content", async (t) => {
+  const f = fixture(t),
+    { account, socket } = await connected(f),
+    other = await connected(f, "B", "15550000003");
+  const p = f.access.owner(),
+    chat = "15550000004@s.whatsapp.net";
+  const execute = (name, args) =>
+    f.tools.execute("whatsapp_" + name, { account: account.id, ...args }, p);
+  for (const [type, mime, kind] of [
+    ["audioMessage", "audio/ogg; codecs=opus", "audio"],
+    ["imageMessage", "image/png", "image"],
+    ["documentMessage", "application/pdf", "resource"],
+  ]) {
+    const key = { id: type, remoteJid: chat, fromMe: false };
+    f.sessions.ingest(account.id, {
+      key,
+      message: { [type]: { mimetype: mime, fileName: "sample" } },
+    });
+    const result = await execute("media_get", { messageId: type });
+    const binary = result.content[1];
+    assert.equal(binary.type, kind);
+    assert.equal((binary.resource ?? binary).mimeType, mime.split(";")[0]);
+    assert.equal(
+      Buffer.from(binary.data ?? binary.resource.blob, "base64").toString(),
+      "test-media",
+    );
+  }
+  assert.equal(socket.reads.length, 0);
+  f.store.put("preferences", account.id, "read-receipts", true);
+  f.sessions.ingest(account.id, message("out", chat, true));
+  await execute("message_get", { messageId: "out" });
+  assert.equal(socket.reads.length, 0);
+  await execute("message_get", { messageId: "imageMessage" });
+  assert.deepEqual(
+    socket.reads.map((k) => k.id),
+    ["imageMessage"],
+  );
+  await execute("media_get", { messageId: "audioMessage" });
+  assert.equal(socket.reads.at(-1).id, "audioMessage");
+  socket.reads.length = 0;
+  await execute("message_list", { chat });
+  assert.equal(socket.reads.length, 3);
+  assert(socket.reads.every((k) => !k.fromMe && k.remoteJid === chat));
+  assert.equal(other.socket.reads.length, 0);
 });

@@ -374,8 +374,31 @@
           )}</h3></div><span class="wa-status" id="phone-state">${escape(stateText(me.account.state))}</span></header>
           <div class="pair-actions"><button id="pair-phone" type="button">${me.account.state === "open" ? "Comprobar conexión" : "Vincular con QR"}</button><button id="copy-continuation" class="text-action" type="button">Copiar enlace para otra pantalla</button></div>
           <section id="pairing-output" hidden aria-labelledby="scan-title"><div class="scan-copy"><h3 id="scan-title">Escanea el código</h3><p>En tu teléfono, abre WhatsApp y ve a <strong>Dispositivos vinculados → Vincular un dispositivo</strong>.</p><p id="pairing-state" role="status">Preparando el QR…</p><button id="close-qr" type="button" class="secondary">Ocultar QR</button></div><img id="pairing-qr" width="240" height="240" alt="Código QR para vincular el número seleccionado" hidden></section>
+          <label class="receipt-setting"><span><strong>Confirmaciones de lectura</strong><small>Mostrar el visto en WhatsApp cuando un agente lea un mensaje.</small></span><input type="checkbox" role="switch" id="read-receipts" ${selected.readReceipts ? "checked" : ""}></label>
           <details class="connection-details"><summary>Detalles y ajustes</summary><dl class="account-state"><dt>Teléfono</dt><dd id="phone-identity">${escape(displayNumber(me.account) || "Sin vincular")}</dd><dt>Historial</dt><dd id="history-state">${escape(syncText(me.account.syncStatus))}</dd></dl><div class="control-row"><button id="pause-phone" type="button" class="secondary">Pausar conexión</button><button id="unlink-phone" type="button" class="secondary">Desvincular teléfono</button></div></details>
         </section><a class="agent-next" href="/app/agentes"><span><strong>Conectar un agente</strong><small>Elige qué números podrá leer y responder.</small></span><span aria-hidden="true">→</span></a>`;
+      byId("read-receipts").onchange = async (e) => {
+        const input = e.currentTarget,
+          enabled = input.checked;
+        input.disabled = true;
+        try {
+          await request("/api/app/numbers/read-receipts", {
+            account: selected.id,
+            enabled,
+          });
+          selected.readReceipts = enabled;
+          notice(
+            enabled
+              ? "Visto activado para esta instancia."
+              : "Visto desactivado para esta instancia.",
+          );
+        } catch (err) {
+          input.checked = !enabled;
+          notice(err.message);
+        } finally {
+          input.disabled = false;
+        }
+      };
       byId("copy-continuation").onclick = () =>
         copy(location.origin + "/app/conexiones");
       if (!me.billing.accessActive) {
@@ -414,7 +437,7 @@
       byId("unlink-phone").onclick = async () => {
         if (
           !confirm(
-            "¿Desvincular tu teléfono? Necesitarás un QR nuevo y se invalidarán tus claves anteriores.",
+            "¿Desvincular tu teléfono? Necesitarás un QR nuevo y se retirarán los permisos anteriores.",
           )
         )
           return;
@@ -423,7 +446,7 @@
           await tool("whatsapp_account_logout", true);
           await refreshState();
           notice(
-            "Dispositivo desvinculado. Crea nuevas claves cuando vuelvas a vincular.",
+            "Dispositivo desvinculado. Vuelve a autorizar tus agentes cuando lo vincules.",
           );
         } catch (e) {
           notice(
@@ -437,24 +460,52 @@
         byId("pair-phone").focus();
       };
     } else if (route === "/app/agentes") {
-      content.replaceChildren(byId("agent-guide").content.cloneNode(true));
-    } else if (route === "/app/facturacion") {
-      content.innerHTML = `<h2>Tu plan y facturación</h2><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco conexiones de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(paymentStateText(me.billing.state, me.user.trialUntil))}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><p>Volver desde Stripe no confirma un pago. El acceso se actualiza al recibir y verificar su estado en el servidor.</p><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div>`;
+      content.innerHTML = '<h2>Mis agentes</h2><div id="agent-list"></div>';
+      renderAgents();
+      content.append(byId("agent-guide").content.cloneNode(true));
+    } else {
+      content.innerHTML = `<h2>Mi cuenta</h2><section class="account-block"><h3>Seguridad</h3><div class="settings-row"><div><strong>Contraseña</strong><small>Acceso a ${escape(me.user.email)}</small></div><button type="button" class="secondary" id="open-password">Cambiar contraseña</button></div></section>
+        <details class="account-block" id="facturacion"><summary>Facturación</summary><div class="billing-facts"><p class="launch-price">USD 10 <span>/ mes por un número</span></p><p>Hasta cinco conexiones de agente y 1.000 solicitudes únicas de envío al mes natural UTC. El consumo de tu proveedor de IA se paga por separado.</p><dl class="account-state"><dt>Estado</dt><dd>${escape(paymentStateText(me.billing.state, me.user.trialUntil))}</dd><dt>Prueba hasta</dt><dd>${escape(date(me.user.trialUntil))}</dd><dt>Uso este mes</dt><dd>${me.usage.requests} de ${me.usage.monthlyLimit} solicitudes</dd><dt>Pagos</dt><dd>${me.billing.enabled ? "Configurados (" + escape(me.billing.mode) + ")" : "Todavía no habilitados"}</dd></dl><p>${escape(me.billing.reason || "La suscripción es mensual. Revisa el importe e impuestos en Stripe antes de confirmar.")}</p><div class="control-row"><button id="checkout" type="button" ${me.billing.enabled && !me.billing.subscribed ? "" : "disabled"}>Activar suscripción</button><button id="billing-portal" type="button" class="secondary" ${me.billing.manageable && me.billing.hasCustomer ? "" : "disabled"}>Gestionar suscripción</button></div><a href="/contacto">Consultar disponibilidad o pedir ayuda →</a></div></details>
+        <div class="settings-row delete-row"><strong>Eliminar cuenta</strong><button type="button" id="open-delete" class="secondary">Eliminar mi cuenta</button></div>
+        <dialog id="password-dialog" aria-labelledby="password-title"><h2 id="password-title">Cambiar contraseña</h2><form class="app-form" id="password-form"><label>Contraseña actual<input type="password" name="current" required autocomplete="current-password"></label><label>Nueva contraseña<input type="password" name="password" required minlength="8" maxlength="200" autocomplete="new-password" aria-describedby="min-length"></label><small id="min-length">Mínimo 8 caracteres.</small><p role="alert"></p><div class="dialog-actions"><button type="button" class="secondary" data-close>Cancelar</button><button type="submit">Guardar contraseña</button></div></form></dialog>
+        <dialog id="delete-dialog" aria-labelledby="delete-title"><h2 id="delete-title">Eliminar mi cuenta</h2><p>Esta acción cierra sesiones, revoca agentes y elimina la conexión y los registros locales. Si existe una suscripción, se cancelará. Si WhatsApp no responde, tendrás que retirar el dispositivo desde el teléfono. Las copias de recuperación cifradas pueden conservar datos previos hasta 30 días.</p><form id="delete-form" class="app-form"><label for="delete-password">Confirma tu contraseña</label><input id="delete-password" name="password" type="password" minlength="8" required autocomplete="current-password"><label for="delete-word">Escribe ELIMINAR</label><input id="delete-word" name="confirm" required pattern="ELIMINAR" autocomplete="off"><p role="alert"></p><div class="dialog-actions"><button type="button" data-close class="secondary">Cancelar</button><button class="danger" type="submit">Eliminar mi cuenta y sus datos</button></div></form></dialog>`;
       byId("checkout").onclick = () => goBilling("/api/app/checkout");
       byId("billing-portal").onclick = () =>
         goBilling("/api/app/billing/portal");
-    } else {
-      content.innerHTML = `<h2>Mi cuenta</h2><p>${escape(me.user.name)} · ${escape(me.user.email)}</p><h3>Eliminar mi cuenta</h3><p>Esta acción cierra sesiones, revoca agentes y elimina la conexión y los registros locales. Si existe una suscripción, se cancelará. Si WhatsApp no responde, tendrás que retirar el dispositivo desde el teléfono. Las copias de recuperación cifradas pueden conservar datos previos hasta 30 días.</p><form id="delete-form" class="app-form"><label for="delete-password">Confirma tu contraseña</label><input id="delete-password" name="password" type="password" minlength="8" required autocomplete="current-password"><label for="delete-word">Escribe ELIMINAR</label><input id="delete-word" name="confirm" required pattern="ELIMINAR" autocomplete="off"><button class="danger" type="submit">Eliminar mi cuenta y sus datos</button></form>`;
-      if (me.agents.length) {
-        const settings = document.createElement("details");
-        settings.innerHTML =
-          '<summary>Conexiones autorizadas y avisos</summary><div id="agent-list"></div>';
-        content.querySelector("h3").before(settings);
-        renderAgents();
+      if (location.hash === "#facturacion") byId("facturacion").open = true;
+      for (const action of ["password", "delete"]) {
+        const dialog = byId(action + "-dialog"),
+          trigger = byId("open-" + action);
+        trigger.onclick = () => dialog.showModal();
+        dialog.querySelector("[data-close]").onclick = () => dialog.close();
+        dialog.onclose = () => {
+          dialog.querySelector("form").reset();
+          dialog.querySelector('[role="alert"]').textContent = "";
+          trigger.focus();
+        };
       }
+      byId("password-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const form = e.currentTarget,
+          submit = form.querySelector("[type=submit]");
+        submit.disabled = true;
+        try {
+          await request(
+            "/api/app/password",
+            Object.fromEntries(new FormData(form)),
+          );
+          byId("password-dialog").close();
+          notice("Contraseña actualizada. Tus otras sesiones web se cerraron.");
+        } catch (err) {
+          form.querySelector('[role="alert"]').textContent = err.message;
+        } finally {
+          submit.disabled = false;
+        }
+      };
       byId("delete-form").onsubmit = async (e) => {
         e.preventDefault();
-        const b = e.currentTarget.querySelector("button");
+        const form = e.currentTarget;
+        const b = form.querySelector("button[type=submit]");
         b.disabled = true;
         try {
           const r = await request(
@@ -472,7 +523,7 @@
           me = null;
           notice(r.message);
         } catch (error) {
-          notice(error.message);
+          form.querySelector('[role="alert"]').textContent = error.message;
           b.disabled = false;
         }
       };
@@ -481,27 +532,35 @@
   function renderAgents() {
     const list = byId("agent-list");
     if (!me.agents.length) {
-      list.innerHTML = "<p>Aún no hay agentes autorizados.</p>";
+      list.innerHTML =
+        "<p>Todavía no has conectado un agente. Elige uno abajo para empezar.</p>";
       return;
     }
-    list.innerHTML =
-      '<table class="agent-table"><caption>Agentes autorizados</caption><thead><tr><th>Agente</th><th>Permisos</th><th>Uso observado / caducidad</th><th>Acción</th></tr></thead><tbody>' +
-      me.agents
-        .map(
-          (a) =>
-            `<tr><th>${escape(a.name)}</th><td>${escape(a.permissions.join(", "))}<br>${escape(
-              (a.numberIds ?? [])
-                .map((id) => {
-                  const n = me.numbers.find((n) => n.id === id);
-                  return n?.label ?? n?.selfJid ?? n?.name ?? id;
-                })
-                .join(", "),
-            )}</td><td>${escape(date(a.lastUsedAt))}<br>Caduca: ${escape(date(a.expiresAt))}</td><td><button class="secondary" data-revoke="${a.id}" type="button" aria-label="Revocar ${escape(a.name)}">Revocar</button></td></tr>`,
-        )
-        .join("") +
-      "</tbody></table>";
-    const panel = document.createElement("section");
-    panel.innerHTML = `<h3>Avisos al agente</h3><p>Si tu agente proporciona una URL que inicia una ejecución, Essoria puede avisarle al llegar un mensaje. El agente consulta y responde por MCP. Si el cliente solo revisa periódicamente, conserva ese intervalo.</p><form id="wake-config"><label>Conexión <select name="id">${me.agents.map((a) => `<option value="${escape(a.id)}">${escape(a.name)} · ${a.wake ? "Avisos activos" : "Sin avisos"}</option>`).join("")}</select></label><label>Avisar por <select name="mode"><option value="off">Desactivado</option><option value="all">Cada mensaje entrante</option><option value="new">Primer mensaje de un chat</option><option value="contacts">Contactos específicos</option></select></label><label>URL HTTPS del agente <input name="url" type="url" autocomplete="off"></label><label>Contactos con código de país, separados por comas <input name="contacts"></label><label>Secreto de firma del receptor (para Grok, pega su secreto whsec_) <input name="signingKey" type="password" autocomplete="new-password"></label><button>Guardar avisos</button></form>`;
+    const numberName = (id) => {
+      const n = me.numbers.find((n) => n.id === id);
+      return (
+        n?.label ||
+        n?.selfJid?.split("@")[0].split(":")[0] ||
+        "Número principal"
+      );
+    };
+    list.innerHTML = me.agents
+      .map((a) => {
+        const logo = {
+          openai: "openai.svg",
+          claude: "claude.svg",
+          grok: "grok.png",
+          muse: "muse.svg",
+        }[a.provider];
+        const icon = logo
+          ? `<img class="agent-logo" width="38" height="38" src="/assets/platforms/${logo}" alt="">`
+          : `<span class="agent-initial" aria-hidden="true">${escape(a.name.slice(0, 1))}</span>`;
+        return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button></article>`;
+      })
+      .join("");
+    const panel = document.createElement("details");
+    panel.className = "agent-alerts";
+    panel.innerHTML = `<summary>Avisos al agente</summary><p>Activa avisos si tu agente te da una URL para despertarlo al recibir mensajes.</p><form id="wake-config"><label>Conexión <select name="id">${me.agents.map((a) => `<option value="${escape(a.id)}">${escape(a.name)} · ${a.wake ? "Avisos activos" : "Sin avisos"}</option>`).join("")}</select></label><label>Avisar por <select name="mode"><option value="off">Desactivado</option><option value="all">Cada mensaje entrante</option><option value="new">Primer mensaje de un chat</option><option value="contacts">Contactos específicos</option></select></label><label>URL HTTPS del agente <input name="url" type="url" autocomplete="off"></label><label>Contactos con código de país, separados por comas <input name="contacts"></label><label>Secreto de firma del receptor (para Grok, pega su secreto whsec_) <input name="signingKey" type="password" autocomplete="new-password"></label><button>Guardar avisos</button></form>`;
     list.append(panel);
     const form = byId("wake-config");
     function showWake() {
@@ -514,8 +573,20 @@
         : "https://";
       form.elements.signingKey.value = "";
     }
-    form.elements.id.onchange = showWake;
+    function showFields() {
+      const off = form.elements.mode.value === "off";
+      for (const field of ["url", "signingKey", "contacts"])
+        form.elements[field].closest("label").hidden =
+          off ||
+          (field === "contacts" && form.elements.mode.value !== "contacts");
+    }
+    form.elements.mode.onchange = showFields;
+    form.elements.id.onchange = () => {
+      showWake();
+      showFields();
+    };
     showWake();
+    showFields();
     form.onsubmit = async (e) => {
       e.preventDefault();
       const v = Object.fromEntries(new FormData(form));
