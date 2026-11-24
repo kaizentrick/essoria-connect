@@ -572,7 +572,7 @@
         const icon = logo
           ? `<img class="agent-logo" width="38" height="38" src="/assets/platforms/${logo}" alt="">`
           : `<span class="agent-initial" aria-hidden="true">${escape(a.name.slice(0, 1))}</span>`;
-        return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button>${a.provider === "openai" && a.events?.count ? dotAlerts(a) : ""}</article>`;
+        return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button>${a.provider === "openai" ? dotAlerts(a) : ""}</article>`;
       })
       .join("");
     const webhookAgents = me.agents.filter(
@@ -608,8 +608,15 @@
     );
   }
   function dotAlerts(agent) {
-    const last = agent.events.lastAccepted;
-    return `<details class="dot-alerts"><summary>Avisos en Dot</summary><p>Suscripciones activas: ${agent.events.count}.</p><p>${last ? "Último aviso recibido por el servicio de Dot: " + escape(date(last)) + "." : "Esperando el primer aviso."} Puedes detener los avisos desde el chat donde los activaste.</p></details>`;
+    const count = agent.events?.count ?? 0;
+    if (count) {
+      const last = agent.events.lastAccepted;
+      return `<details class="dot-alerts"><summary>Avisos activos en Dot (${count})</summary><p>${last ? "Último aviso recibido por ChatGPT el " + escape(date(last)) + "." : "Esperando el primer aviso."} Para pausar los avisos, pídeselo a tu Dot en el mismo chat.</p></details>`;
+    }
+    return `<details class="dot-alerts"><summary>Activar avisos en Dot</summary>
+      <p>En el chat de tu Dot, pulsa <strong>+</strong>, elige <strong>Essoria</strong> y envía este mensaje.</p>
+      <blockquote>Crea una tarea en ChatGPT Work con el evento de Essoria para mensajes entrantes de WhatsApp. Pregúntame qué número quiero vigilar y si quiero todos los mensajes, solo chats nuevos o solo ciertos contactos. Cuando llegue uno que coincida, avísame en este chat.</blockquote>
+      <button type="button" class="secondary" data-guide-copy>Copiar mensaje</button></details>`;
   }
   function manualWake(list, webhookAgents) {
     const panel = document.createElement("details");
