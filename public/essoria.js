@@ -572,20 +572,9 @@
         const icon = logo
           ? `<img class="agent-logo" width="38" height="38" src="/assets/platforms/${logo}" alt="">`
           : `<span class="agent-initial" aria-hidden="true">${escape(a.name.slice(0, 1))}</span>`;
-        return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button>${a.provider === "openai" ? dotAlerts(a) : ""}</article>`;
+        return `<article class="connected-agent"><div class="agent-identity">${icon}<div><h3>${escape(a.name)}</h3><p>${escape(a.numberIds.map(numberName).join(" · "))}</p></div></div><div class="agent-access"><span>${a.permissions.includes("send") ? "Leer y responder" : "Leer mensajes"}</span><small>${a.expiresAt ? "Hasta el " + escape(new Date(a.expiresAt).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })) : "Permiso indefinido"}</small></div><button class="secondary" data-revoke="${escape(a.id)}" type="button" aria-label="Revocar acceso de ${escape(a.name)}">Revocar</button>${a.provider === "openai" && a.events?.count ? dotAlerts(a) : ""}</article>`;
       })
       .join("");
-    list.querySelectorAll("[data-dot-prompt]").forEach((button) => {
-      button.onclick = async () => {
-        const message = button.previousElementSibling.textContent;
-        try {
-          await navigator.clipboard.writeText(message);
-          button.textContent = "Instrucción copiada";
-        } catch {
-          notice("Selecciona la instrucción y cópiala para Dot.");
-        }
-      };
-    });
     const webhookAgents = me.agents.filter(
       (a) => a.provider !== "openai" || a.wake,
     );
@@ -619,10 +608,8 @@
     );
   }
   function dotAlerts(agent) {
-    const status = agent.events?.count
-      ? `Suscripciones activas: ${agent.events.count}.${agent.events.lastAccepted ? " Último aviso recibido por el servicio de Dot: " + escape(date(agent.events.lastAccepted)) + "." : ""}`
-      : "Todavía no hay una suscripción activa.";
-    return `<details class="dot-alerts"><summary>Avisos en Dot</summary><p>${status}</p><p>Pide el aviso en el chat de tu Dot. Puedes elegir un número, un contacto o solo chats nuevos. Para detenerlo, pídeselo en ese mismo chat.</p><div class="dot-prompt"><p>Usa Essoria para avisarme cuando llegue un mensaje de WhatsApp. Pregúntame qué número y qué chats quiero seguir antes de activar el aviso.</p><button type="button" class="secondary" data-dot-prompt>Copiar instrucción</button></div></details>`;
+    const last = agent.events.lastAccepted;
+    return `<details class="dot-alerts"><summary>Avisos en Dot</summary><p>Suscripciones activas: ${agent.events.count}.</p><p>${last ? "Último aviso recibido por el servicio de Dot: " + escape(date(last)) + "." : "Esperando el primer aviso."} Puedes detener los avisos desde el chat donde los activaste.</p></details>`;
   }
   function manualWake(list, webhookAgents) {
     const panel = document.createElement("details");

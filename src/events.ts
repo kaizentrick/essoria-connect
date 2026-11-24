@@ -41,6 +41,9 @@ const delivery = z.object({
   url: z.string().url().max(2048),
 });
 const base = z.object({ name: z.literal(name), arguments: args, delivery });
+const unsubscribe = base.extend({
+  delivery: delivery.extend({ mode: z.literal("webhook").optional() }),
+});
 const subscribe = base.extend({
   delivery: delivery.extend({
     secret: z
@@ -59,7 +62,12 @@ const subscribe = base.extend({
   }),
   ttlMs: z.number().int().positive().nullable().optional(),
 });
-export const eventCapabilities = { tools: {}, events: {} };
+export const eventExtension = "io.modelcontextprotocol/events";
+export const eventCapabilities = {
+  tools: {},
+  events: {},
+  extensions: { [eventExtension]: {} },
+};
 export const eventMethods = [
   "events/list",
   "events/subscribe",
@@ -139,17 +147,22 @@ export class AgentEvents {
       .prepare("DELETE FROM agent_subscriptions WHERE id=? AND account=?")
       .run(id, account);
   }
-  async handle(method: EventMethod, params: unknown, p: Principal) {
+  async handle(
+    method: EventMethod,
+    params: unknown,
+    p: Principal,
+    negotiated = false,
+  ) {
     if (!this.supports(p)) throw rpcError(-32601, "Events unavailable");
     if (method === "events/list") return { events: [definition] };
     const isCreate = method === "events/subscribe";
-    const parsed = (isCreate ? subscribe : base).safeParse(params);
+    const parsed = (isCreate ? subscribe : unsubscribe).safeParse(params);
     if (!parsed.success)
       throw rpcError(-32602, "Invalid event filters or webhook settings");
     const { arguments: filter, delivery: dest } = parsed.data,
       owner = p.tokenHash!;
     if (!this.allowed(owner, filter.account))
-      throw rpcError(-32602, "Account unavailable");
+      throw rpcError(-32024, "Account unavailable");
     let url: string;
     try {
       url = receiver(dest.url).href;
@@ -186,10 +199,13 @@ export class AgentEvents {
         .get(owner, now)?.n,
     );
     if (!old && count >= 24)
-      throw rpcError(-32602, "Subscription limit reached");
+      throw rpcError(-32025, "Subscription limit reached", {
+        limit: "subscriptions",
+        max: 24,
+      });
     if (!old || old.secret !== secret || now - old.verifiedAt > 5 * 60000) {
       if (this.verifying.has(owner) || this.verifying.size >= 24)
-        throw rpcError(-32015, "Callback busy", { reason: "rate_limited" });
+        throw rpcError(-32025, "Callback busy", { reason: "rate_limited" });
       this.verifying.add(owner);
       try {
         const challenge = randomBytes(28).toString("base64url"),
@@ -212,18 +228,22 @@ export class AgentEvents {
           throw new Error();
         config.verifiedAt = Date.now();
       } catch (e) {
-        throw rpcError(-32015, "Callback verification failed", {
-          reason:
-            (e as Error)?.name === "AbortError"
-              ? "timeout"
-              : "challenge_failed",
-        });
+        throw rpcError(
+          negotiated ? -32027 : -32015,
+          "Callback verification failed",
+          {
+            reason:
+              (e as Error)?.name === "AbortError"
+                ? "timeout"
+                : "challenge_failed",
+          },
+        );
       } finally {
         this.verifying.delete(owner);
       }
     }
     if (!this.allowed(owner, filter.account))
-      throw rpcError(-32602, "Account unavailable");
+      throw rpcError(-32024, "Account unavailable");
     if (old && old.secret !== secret)
       config.previous = { secret: old.secret, until: now + 300000 };
     else if (old?.previous && old.previous.until > now)
@@ -336,15 +356,11 @@ export class AgentEvents {
         status = (await this.post(c.url, body, signed(body, id, sub, c)))
           .status;
       } catch {}
-      if (status === 410) {
-        this.remove(sub, account);
-        continue;
-      }
       if (status >= 200 && status < 300)
         this.store.db
           .prepare("UPDATE agent_subscriptions SET accepted=? WHERE id=?")
           .run(Date.now(), sub);
-      else if (status !== 413 && Number(d.attempt) < 5) {
+      else if (status !== 410 && status !== 413 && Number(d.attempt) < 5) {
         this.store.db
           .prepare(
             "UPDATE agent_deliveries SET attempt=attempt+1,due=? WHERE id=?",

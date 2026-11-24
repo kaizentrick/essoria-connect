@@ -1368,4 +1368,3 @@ dialog [role=alert]:empty {display:none}
 .dot-alerts{flex:1 0 100%;grid-column:1/-1;border-top:1px solid var(--edge);padding-top:12px}
 .dot-alerts summary{cursor:pointer;font-weight:600}
 .dot-alerts p{margin:10px 0!important}
-.dot-prompt{background:#0b2022;padding:6px 14px 14px;border-radius:12px}

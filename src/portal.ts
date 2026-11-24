@@ -574,7 +574,32 @@ export class Portal {
     if (!p.tokenHash || !p.accountIds) return;
     const id = p.tokenHash,
       key = this.store.get("access-key", "", id);
-    if (!key || (legacy && key.connection)) return;
+    if (!key) return;
+    if (legacy && key.connection) {
+      const permissions = key.permissions.filter((v: Permission) =>
+        info.permissions.includes(v),
+      );
+      if (permissions.length !== key.permissions.length)
+        this.store.transaction(() => {
+          this.store.put(
+            "access-key",
+            "",
+            id,
+            { ...key, permissions },
+            expires * 1000,
+          );
+          if (!permissions.includes("read")) {
+            this.store.remove("wake", "", id);
+            this.store.db
+              .prepare("DELETE FROM wake_queue WHERE connection=?")
+              .run(id);
+            this.store.db
+              .prepare("DELETE FROM agent_subscriptions WHERE owner=?")
+              .run(id);
+          }
+        });
+      return;
+    }
     this.store.transaction(() => {
       this.store.put(
         "access-key",
