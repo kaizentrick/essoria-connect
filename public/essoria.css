@@ -1366,5 +1366,6 @@ dialog [role=alert]:empty {display:none}
 @media(max-width:550px){.usage-title,.plan-details{align-items:flex-start;flex-direction:column;gap:8px}.plan-details{gap:14px}}
 .connected-agent:has(.dot-alerts){flex-wrap:wrap}
 .dot-alerts{flex:1 0 100%;grid-column:1/-1;border-top:1px solid var(--edge);padding-top:12px}
+.dot-alerts blockquote{margin:12px 0;padding:4px 16px;border-inline-start:3px solid var(--edge);overflow-wrap:anywhere}
 .dot-alerts summary{cursor:pointer;font-weight:600}
 .dot-alerts p{margin:10px 0!important}
