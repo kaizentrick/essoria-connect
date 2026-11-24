@@ -497,15 +497,30 @@ export function createOAuth({
     redirect.searchParams.set("iss", issuer.href);
     if (pending.params.state)
       redirect.searchParams.set("state", pending.params.state);
-    res.set(
-      "Content-Security-Policy",
-      `default-src 'none'; form-action 'self' ${redirect.origin}; frame-ancestors 'none'; base-uri 'none'`,
-    );
+    res.set("Referrer-Policy", "no-referrer");
     res.clearCookie(
       pending.formKey ? consentCookie(id) : legacyConsentCookie,
       consentCookieOptions,
     );
-    res.redirect(303, redirect.href);
+    res.vary("Accept");
+    if (res.req.accepts(["text/plain", "text/html"]) !== "text/html")
+      return res.redirect(303, redirect.href);
+
+    // Start a new navigation so the client's own redirects aren't form submissions.
+    const href = escape(redirect.href);
+    const title = result.error ? "Conexión cancelada" : "Permisos confirmados";
+    res.set(
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    return res.type("html")
+      .send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <meta http-equiv="refresh" content="0;url=${href}">
+      <title>${title} · Essoria</title><link rel="stylesheet" href="/assets/consent.css"></head>
+      <body><main><img class="brand" src="/assets/brand/essoria/logo-horizontal-dark.png" width="130" alt="Essoria">
+      <section><h1>${title}</h1><p>Volviendo a <bdi>${escape(redirect.host)}</bdi>…</p>
+      <footer><a class="primary" rel="noreferrer" href="${href}">Volver al agente</a></footer></section></main></body></html>`);
   }
   const attempts = new Map();
   app.post(
@@ -650,7 +665,7 @@ function consentPage(res, id, client, pending, error, numbers, proof) {
   const clientName = escape(client.client_name || "tu agente");
   res.set(
     "Content-Security-Policy",
-    `default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; form-action 'self' ${callback.origin}; frame-ancestors 'none'; base-uri 'none'`,
+    "default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   );
   res.type("html")
     .send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
