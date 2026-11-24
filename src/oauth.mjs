@@ -97,8 +97,6 @@ class Store {
 
 export function createOAuth({
   config,
-  adminToken,
-  identify,
   companyNumbers,
   authorizeNumbers,
   revokeCompany,
@@ -110,13 +108,6 @@ export function createOAuth({
   const issuer = new URL(ORIGIN);
   const challenge = `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp", scope="${SCOPES.join(" ")}"`;
   const store = new Store(storePath, config.masterKey);
-  const authForOwner = () => ({
-    role: "owner",
-    profileId: config.ownerProfileId,
-    name: "All WhatsApp accounts",
-    credentialHash: digest(config.adminToken),
-    permissions: ["read", "send", "manage"],
-  });
   const resourceOk = (resource) =>
     !resource || [RESOURCE, ORIGIN + "/mcp/code"].includes(resource.href);
   const getGrant = (kind, token, client) => {
@@ -399,7 +390,6 @@ export function createOAuth({
       if (req.headers.origin !== ORIGIN)
         return res.status(403).send("Invalid origin");
       const ip = req.ip,
-        key = String(req.body.key ?? ""),
         id = String(req.body.request ?? "");
       const pending = store.get("pending", id);
       const cookie = String(req.headers.cookie ?? "")
@@ -431,7 +421,7 @@ export function createOAuth({
             ids,
             String(client.client_name ?? "Agente MCP").slice(0, 60),
           );
-        } else principal = await identify(key);
+        }
       } catch {}
       if (!principal) {
         const c =
@@ -445,10 +435,16 @@ export function createOAuth({
           id,
           client,
           pending,
-          "Invalid access key.",
+          "Inicia sesión y selecciona al menos una instancia.",
+          (() => {
+            try {
+              return companyNumbers?.(req);
+            } catch {
+              return undefined;
+            }
+          })(),
         );
       }
-      if (principal.role === "owner") principal = authForOwner();
       let scopes = pending.params.scopes.filter(
         (s) =>
           s === "whatsapp:read" ||
@@ -504,10 +500,9 @@ function consentPage(res, id, client, pending, error = "", numbers) {
     `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'; base-uri 'none'`,
   );
   const send = pending.params.scopes.includes("whatsapp:send");
-  const manage = pending.params.scopes.includes("whatsapp:manage");
   res
     .type("html")
     .send(
-      `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar agente · Essoria</title><style>body{font:16px system-ui;background:#081b1d;color:#e6f3ef;margin:0;padding:32px}main{max-width:480px;margin:8vh auto;background:#0e282b;padding:32px;border-radius:0;border:1px solid #325452}h1{font-size:26px}label{display:block;margin:20px 0 8px}input[type=password]{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #7aab9f;border-radius:0;background:#081b1d;color:#e6f3ef}button{margin-top:24px;width:100%;padding:13px;background:#5dd5c7;color:#062b28;border:0;border-radius:0;font:inherit}small{color:#b2c9c2}.error{color:#ffbcae}</style><main><h1>Conecta tu agente a Essoria</h1><p>Autorizar <strong>${escape(client.client_name ?? "Cliente MCP")}</strong>.</p><p><small>Callback: ${escape(new URL(pending.params.redirectUri).origin)}</small></p>${numbers ? `<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><input type="hidden" name="company" value="yes"><input type="hidden" name="send" value="yes"><fieldset><legend>Números para esta conexión</legend>${numbers.map((a) => `<label><input type="checkbox" name="number" value="${escape(a.id)}"> ${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</label>`).join("")}</fieldset><p>El agente podrá leer ${send ? "y responder " : ""}en los números seleccionados.</p><button>Autorizar conexión</button></form>` : `<p><a style="color:#94eee1" href="/entrar?oauth=${encodeURIComponent(id)}">Iniciar sesión para elegir mis números</a></p>`}<details><summary>Conectar con una clave existente</summary><p>Una clave de propietario permite todas las cuentas. La clave de una cuenta solo autoriza su propio número.</p>${error ? `<p class="error">${escape(error)}</p>` : ""}<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><label for="key">Clave de acceso</label><input id="key" type="password" name="key" required autocomplete="off"><label><input type="checkbox" checked disabled> Leer cuentas, chats, contactos y grupos</label>${send ? '<label><input type="checkbox" name="send" value="yes" checked> Permitir el envío de mensajes</label>' : ""}${manage ? '<label><input type="checkbox" name="manage" value="yes" checked> Permitir la vinculación y gestión de la cuenta</label>' : ""}<button type="submit">Autorizar conexión</button></form><p><small>La clave permanece en este servidor. Tu agente recibe una autorización que puedes revocar.</small></p></details></main></html>`,
+      `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar agente · Essoria</title><style>body{font:16px system-ui;background:#081b1d;color:#e6f3ef;margin:0;padding:32px}main{max-width:480px;margin:8vh auto;background:#0e282b;padding:32px;border-radius:12px;border:1px solid #325452}h1{font-size:26px}label{display:block;margin:20px 0 8px}input[type=password]{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #7aab9f;border-radius:12px;background:#081b1d;color:#e6f3ef}button{margin-top:24px;width:100%;padding:13px;background:#5dd5c7;color:#062b28;border:0;border-radius:12px;font:inherit}small{color:#b2c9c2}.error{color:#ffbcae}</style><main><h1>Conecta tu agente a Essoria</h1><p>Autorizar <strong>${escape(client.client_name ?? "Cliente MCP")}</strong>.</p><p><small>Callback: ${escape(new URL(pending.params.redirectUri).origin)}</small></p>${numbers ? `<form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${escape(id)}"><input type="hidden" name="company" value="yes"><input type="hidden" name="send" value="yes"><fieldset><legend>Números para esta conexión</legend>${numbers.map((a) => `<label><input type="checkbox" name="number" ${numbers.length === 1 ? "checked" : ""} value="${escape(a.id)}"> ${escape(a.label ?? a.name)} · ${escape(a.selfJid ?? "Sin vincular")}</label>`).join("")}</fieldset><p>El agente podrá leer ${send ? "y responder " : ""}en los números seleccionados.</p><button>Autorizar conexión</button></form>` : `<p><a style="color:#94eee1" href="/entrar?oauth=${encodeURIComponent(id)}">Iniciar sesión para elegir mis números</a></p>`}${error ? `<p class="error">${escape(error)}</p>` : ""}</main></html>`,
     );
 }

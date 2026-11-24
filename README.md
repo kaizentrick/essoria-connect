@@ -6,7 +6,7 @@ El transporte procede del [prototipo WhatsApp MCP](https://github.com/kaizentric
 
 ## Qué incluye
 
-- Registro, acceso, código de recuperación, prueba de siete días y eliminación de la cuenta.
+- Registro, acceso, prueba de siete días y eliminación de la cuenta.
 - Una cuenta de empresa puede vincular varios números. En OAuth se seleccionan los números que cada agente puede leer y responder. El portal permite revocar cada conexión.
 - 20 herramientas MCP para cuentas, QR, contactos, chats, historial disponible, grupos, envío a uno mismo, contactos o números nuevos con WhatsApp, archivos y recibos. El catálogo se filtra según los permisos.
 - MCP 2026-07-28 en `/mcp`, compatibilidad con clientes anteriores, OAuth con PKCE y puente stdio. Cada agente recibe una autorización revocable.
@@ -28,7 +28,7 @@ WA_DATA_DIR=./data npm run init
 WA_DATA_DIR=./data WA_PUBLIC_URL=http://127.0.0.1:8787 ESSORIA_SIGNUP_OPEN=true npm start
 ```
 
-Abre `http://127.0.0.1:8787`. Regístrate, guarda el código de recuperación y abre **Conexiones**. Muestra el QR en un ordenador o tableta y escanéalo desde WhatsApp → Dispositivos vinculados en el teléfono. Después crea una clave en **Agentes**. Lectura es el permiso inicial; envío y gestión se eligen explícitamente.
+Regístrate y abre **Instancias** para crear una conexión de WhatsApp. Escanea su QR desde el teléfono. En **Agentes**, elige tu cliente y sigue sus instrucciones OAuth.
 
 Docker:
 
@@ -42,7 +42,7 @@ El puerto se publica solo en loopback. Configura tu túnel o proxy para la total
 
 ## Conectar un agente
 
-Para un cliente MCP remoto, añade `https://TU-DOMINIO/mcp`, inicia su flujo OAuth y autoriza con la clave de **tu cuenta**. Si el cliente acepta Bearer directamente, configura esa clave en su almacén privado de credenciales. No uses la clave global del operador para un agente limitado.
+Para conectar un agente usa la guía de **Agentes**. En OAuth, inicia sesión y selecciona las instancias que podrá leer y responder.
 
 Un cliente exclusivamente stdio puede ejecutar:
 

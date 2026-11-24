@@ -56,13 +56,12 @@ test("registration isolates account data, uses private sessions and never expose
   const f = await portalFixture(t),
     a = await f.register("a@example.test"),
     b = await f.register("b@example.test");
-  assert(a.body.recoveryCode.startsWith("essoria-recovery-"));
+  assert.deepEqual(a.body, { ok: true });
   const u = await (await f.get("/api/app/me", a.cookie)).json(),
     v = await (await f.get("/api/app/me", b.cookie)).json();
   assert.notEqual(u.account.id, v.account.id);
   assert.equal(u.user.email, "a@example.test");
   assert(!JSON.stringify(u).includes("password"));
-  assert(!JSON.stringify(u).includes(a.body.recoveryCode));
   assert.equal((await f.get("/api/app/me")).status, 401);
   assert.equal(
     (
@@ -75,14 +74,22 @@ test("registration isolates account data, uses private sessions and never expose
     ).status,
     403,
   );
-  const issued = await (
-    await f.post(
-      "/api/app/agents",
-      { name: "Read agent", permissions: ["read"] },
-      a.cookie,
-    )
-  ).json();
-  const p = f.service.access.identify(issued.token);
+  assert.equal(
+    (
+      await f.post(
+        "/api/app/agents",
+        { name: "manual", permissions: ["read"] },
+        a.cookie,
+      )
+    ).status,
+    404,
+  );
+  const p = f.service.portal.authorizeNumbers(
+    { headers: { cookie: a.cookie } },
+    [u.account.id],
+    "Agente",
+  );
+  const id = p.tokenHash;
   assert.equal(p.accountId, u.account.id);
   assert(
     (
@@ -95,55 +102,27 @@ test("registration isolates account data, uses private sessions and never expose
   );
   const own = await (await f.get("/api/app/me", a.cookie)).json();
   assert.equal(own.agents.length, 1);
-  assert(!JSON.stringify(own).includes(issued.token));
+
   assert.equal(
-    (await f.post("/api/app/agents/revoke", { id: issued.id }, b.cookie))
-      .status,
+    (await f.post("/api/app/agents/revoke", { id }, b.cookie)).status,
     400,
   );
   assert.equal(
-    (await f.post("/api/app/agents/revoke", { id: issued.id }, a.cookie))
-      .status,
+    (await f.post("/api/app/agents/revoke", { id }, a.cookie)).status,
     200,
   );
-  assert.equal(f.service.access.identify(issued.token), null);
+  assert.equal(f.service.access.resolve(p), null);
 });
-test("recovery rotates sessions and agent credentials, and deletion removes own local data only", async (t) => {
+test("retired recovery endpoint rejects requests and deletion removes own local data only", async (t) => {
   const f = await portalFixture(t),
     a = await f.register("recovery@example.test"),
     b = await f.register("other@example.test");
   const me = await (await f.get("/api/app/me", a.cookie)).json(),
-    k = await (
-      await f.post(
-        "/api/app/agents",
-        { name: "Old agent", permissions: ["read", "send"] },
-        a.cookie,
-      )
-    ).json();
-  const r = await f.post("/api/app/recover", {
-    email: "recovery@example.test",
-    password: "new-long-password-456",
-    recoveryCode: a.body.recoveryCode,
-  });
-  assert.equal(r.status, 200);
-  const cookie = r.headers.get("set-cookie").split(";")[0],
-    recovery = await r.json();
-  assert.notEqual(recovery.recoveryCode, a.body.recoveryCode);
-  assert.equal((await f.get("/api/app/me", a.cookie)).status, 401);
-  assert.equal(f.service.access.identify(k.token), null);
-  assert.equal(
-    (
-      await f.post("/api/app/recover", {
-        email: "recovery@example.test",
-        password: "new-long-password-456",
-        recoveryCode: a.body.recoveryCode,
-      })
-    ).status,
-    400,
-  );
+    cookie = a.cookie;
+  assert.equal((await f.post("/api/app/recover", {})).status, 404);
   const deletion = await f.post(
     "/api/app/delete",
-    { password: "new-long-password-456", confirm: "ELIMINAR" },
+    { password: "long-fictional-password-123", confirm: "ELIMINAR" },
     cookie,
   );
   assert.equal(deletion.status, 200);
@@ -171,27 +150,6 @@ test("billing remains closed without dedicated merchant readiness; trial expiry 
   ).json();
   assert(result.isError);
   assert.equal(f.fake.sockets.length, 0);
-  for (let n = 0; n < 5; n++)
-    assert.equal(
-      (
-        await f.post(
-          "/api/app/agents",
-          { name: "Agent " + n, permissions: ["read"] },
-          a.cookie,
-        )
-      ).status,
-      201,
-    );
-  assert.equal(
-    (
-      await f.post(
-        "/api/app/agents",
-        { name: "Too many", permissions: ["read"] },
-        a.cookie,
-      )
-    ).status,
-    400,
-  );
 });
 test("public pages preserve availability truth, support requests persist, and metadata excludes private areas", async (t) => {
   const f = await portalFixture(t);
@@ -337,13 +295,8 @@ test("company grants restrict both MCP and queued wakes to chosen numbers", asyn
 test("2026 MCP serves discovery and authorized tools on the public transport", async (t) => {
   const f = await portalFixture(t),
     u = await f.register("modern@example.test");
-  const key = await (
-    await f.post(
-      "/api/app/agents",
-      { name: "Client", permissions: ["read", "send"] },
-      u.cookie,
-    )
-  ).json();
+  const me = await (await f.get("/api/app/me", u.cookie)).json();
+  const key = f.service.access.issue(me.account.id, ["read", "send"]);
   const version = "2026-07-28";
   for (const [method, params] of [
     ["server/discover", {}],
@@ -402,32 +355,15 @@ test("passwords require eight characters throughout the account lifecycle", asyn
     password,
   });
   assert.equal(registered.status, 201);
-  const { recoveryCode } = await registered.json();
+  assert.deepEqual(await registered.json(), { ok: true });
   assert.equal(
     (await f.post("/api/app/login", { email: account.email, password })).status,
     200,
   );
-  const change = { email: account.email, recoveryCode, password: "87654321" };
+  const cookie = registered.headers.get("set-cookie").split(";")[0];
   assert.equal(
-    (
-      await f.post("/api/app/recover", {
-        ...change,
-        password: change.password.slice(1),
-      })
-    ).status,
-    400,
-  );
-  const recovered = await f.post("/api/app/recover", change);
-  assert.equal(recovered.status, 200);
-  const cookie = recovered.headers.get("set-cookie").split(";")[0];
-  assert.equal(
-    (
-      await f.post(
-        "/api/app/delete",
-        { password: change.password, confirm: "ELIMINAR" },
-        cookie,
-      )
-    ).status,
+    (await f.post("/api/app/delete", { password, confirm: "ELIMINAR" }, cookie))
+      .status,
     200,
   );
 });

@@ -1,6 +1,6 @@
 # Essoria en español
 
-Consulta el [README](../README.md) para compilar y ejecutar la aplicación. La web está en `/`, las conexiones de cliente en `/app/conexiones`, las claves limitadas en `/app/agentes` y la consola global del operador en `/operator`.
+Consulta el [README](../README.md) para compilar y ejecutar la aplicación. La web está en `/`, las conexiones de cliente en `/app/conexiones`, las instrucciones OAuth por agente en `/app/agentes` y la consola global del operador en `/operator`.
 
 [MCP y herramientas](mcp.md) · [Clientes](clients.md) · [Despliegue](deployment.md) · [Facturación](billing.md) · [Code Mode](codemode.md).
 

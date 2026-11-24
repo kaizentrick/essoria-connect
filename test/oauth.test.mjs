@@ -19,7 +19,8 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
     },
     adminToken: f.config.adminToken,
     storePath: join(f.dir, "oauth.sqlite"),
-    identify: async (k) => f.access.identify(k),
+    authorizeNumbers: async (req) =>
+      f.access.identify(req.headers["x-fixture-session"]),
     resolvePrincipal: async (p) => f.access.resolve(p),
   };
   const o = createOAuth(settings),
@@ -96,7 +97,7 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
         .includes("form-action 'self' https://agent.example.test"),
     );
     const html = await res.text(),
-      id = html.match(/name="request" value="([^"]+)"/)[1],
+      id = html.match(/entrar\?oauth=([a-zA-Z0-9_-]+)/)[1],
       cookie = res.headers.get("set-cookie").split(";")[0];
     assert.equal(
       (
@@ -122,10 +123,11 @@ test("OAuth discovery, PKCE, CSRF, scope reduction, persistence, refresh and cre
       "/oauth/consent",
       {
         request: id,
-        key: accessKey,
+        company: "yes",
+        number: a.id,
         ...(send ? { send: "yes", manage: "yes" } : {}),
       },
-      { origin, cookie },
+      { origin, cookie, "x-fixture-session": accessKey },
     );
     assert.equal(approval.status, 303);
     const redirect = new URL(approval.headers.get("location"));
